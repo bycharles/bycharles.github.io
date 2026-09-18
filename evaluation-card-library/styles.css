@@ -7,3 +7,8 @@
 .page-button:hover:not(:disabled),.page-button.active{border-color:var(--orange);color:var(--orange);background:#fff7f2}
 .page-button:disabled{opacity:.45;cursor:not-allowed}
 .page-status{margin:0 5px;color:var(--muted);font-size:13px}
+.search span{left:16px;width:18px;height:18px;font-size:0}
+.search span::before{content:"";position:absolute;left:1px;top:1px;width:10px;height:10px;border:2px solid var(--muted);border-radius:50%}
+.search span::after{content:"";position:absolute;left:12px;top:13px;width:6px;height:2px;border-radius:2px;background:var(--muted);transform:rotate(45deg);transform-origin:left center}
+.checks label{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;line-height:1.25}
+.field .checks input[type="checkbox"]{flex:0 0 auto;width:auto;height:auto;margin:0}
