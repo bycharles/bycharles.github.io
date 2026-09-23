@@ -11,6 +11,28 @@ const evaluationLabels = { quantitative: 'Quantitative', qualitative: 'Qualitati
 const statisticalLabels = { concept: 'Study design concept', 'two-group': 'Two-group comparison', 'multi-group': 'Multi-group comparison' };
 const stageLabels = { formative: 'Formative', comparative: 'Comparative', validation: 'Validation', deployment: 'Deployment' };
 const PAGE_SIZE = 6;
+const SYSTEM_CHANGELOG = [
+  {
+    version: '2.1.0', date: '2026-09-23', title: 'Focused method cards',
+    changes: ['Refocused cards on classification, key characteristics, when to use, assumptions, limitations, and sources.', 'Removed the Study Plan module.', 'Separated the system release log from method-level edit history.']
+  },
+  {
+    version: '2.0.0', date: '2026-09-23', title: 'Evaluation & Analysis expansion',
+    changes: ['Renamed the library to Evaluation & Analysis Method Library.', 'Added nine statistical methods and three decision guides.', 'Added the Statistical Test Selector.']
+  },
+  {
+    version: '1.3.0', date: '2026-09-18', title: 'Browsing improvements',
+    changes: ['Added six-card pagination.', 'Improved search and form alignment.', 'Simplified category labels on cards.']
+  },
+  {
+    version: '1.2.0', date: '2026-09-18', title: 'Collaborative library workflow',
+    changes: ['Added email sign-in, administrator editing, favorites, and card comparison.', 'Added CSV import, library export, soft deletion, and method-level version recovery.']
+  },
+  {
+    version: '1.0.0', date: '2026-09-17', title: 'Initial evaluation library',
+    changes: ['Published the first 13 evaluation cards with search and category filters.']
+  }
+];
 const versionFields = [
   'id', 'method_type', 'category', 'stat_category', 'analysis_modes', 'name', 'stage', 'evidence',
   'summary', 'claim', 'suitable', 'design', 'analysis', 'misuse', 'alternative',
@@ -218,18 +240,18 @@ function render() {
 
 function renderCard(method) {
   const isStatistical = method.method_type === 'statistical';
-  const family = isStatistical ? statisticalLabels[method.stat_category] : evaluationLabels[method.category];
+  const family = isStatistical ? statisticalLabels[method.stat_category] : 'Evaluation method';
   const details = method.stat_details || {};
   const chips = isStatistical
     ? [details.sample_relationship, details.outcome_type, details.group_count].filter(Boolean)
-    : method.evidence.slice(0, 3);
-  const metaTitle = isStatistical ? 'DECISION TARGET' : 'BEST FOR';
+    : [...method.evidence.slice(0, 2), ...method.stage.slice(0, 1).map(value => stageLabels[value])];
+  const analysisMode = isStatistical ? 'Quantitative' : evaluationLabels[method.category];
   return `<article class="method-card ${isStatistical ? `statistical ${method.stat_category}` : method.category}" data-id="${escapeHtml(method.id)}" tabindex="0">
     ${wizardScores ? `<span class="recommend">${wizardScores[method.id]} match points</span>` : ''}
-    <p class="card-family">${escapeHtml(family || moduleName(method.method_type))}</p>
+    <div class="card-classification"><span class="mode primary">${escapeHtml(analysisMode)}</span><span>${escapeHtml(family || moduleName(method.method_type))}</span></div>
     <div class="card-head"><h3>${escapeHtml(method.name)}</h3></div>
-    <p class="summary">${escapeHtml(method.summary)}</p>
-    <p class="mini">${metaTitle}</p><p class="claim">${escapeHtml(method.claim)}</p>
+    <p class="mini">KEY CHARACTERISTICS</p><p class="summary">${escapeHtml(method.summary)}</p>
+    <p class="mini">WHEN TO USE</p><p class="claim">${escapeHtml(method.suitable)}</p>
     <div class="tags">${chips.slice(0, 3).map(value => `<span class="tag">${escapeHtml(value)}</span>`).join('')}</div>
     <div class="card-actions"><label><input class="compare-check" type="checkbox" ${selected.has(method.id) ? 'checked' : ''}> Compare</label><button class="star ${favorites.has(method.id) ? 'active' : ''}" aria-label="Favorite">${favorites.has(method.id) ? '★' : '☆'}</button></div>
   </article>`;
@@ -307,18 +329,19 @@ function compareMethods() {
   const chosen = [...selected].map(id => methods.find(method => method.id === id)).filter(Boolean);
   const statistical = chosen[0].method_type === 'statistical';
   const rows = statistical ? [
+    ['Analysis mode', () => 'Quantitative'],
     ['Method family', method => statisticalLabels[method.stat_category]],
-    ['Decision target', method => method.claim],
+    ['What it compares or estimates', method => method.claim],
+    ['When to use', method => method.suitable],
     ['Outcome type', method => method.stat_details?.outcome_type],
     ['Groups / conditions', method => method.stat_details?.group_count],
     ['Sample relationship', method => method.stat_details?.sample_relationship],
     ['Key assumptions', method => method.stat_details?.assumptions],
-    ['What to report', method => method.stat_details?.reporting],
     ['Common misuse', method => method.misuse],
     ['Reference', method => method.reference_paper]
   ] : [
-    ['Primary category', method => evaluationLabels[method.category]],
-    ['Best for', method => method.claim],
+    ['Analysis mode', method => method.analysis_modes.map(value => evaluationLabels[value] || value).join(', ') || evaluationLabels[method.category]],
+    ['Primary classification', method => evaluationLabels[method.category]],
     ['When to use', method => method.suitable],
     ['Study design', method => method.design],
     ['Data & analysis', method => method.analysis],
@@ -335,29 +358,28 @@ function openDetail(id) {
   if (!method) return;
   const statistical = method.method_type === 'statistical';
   const detail = method.stat_details || {};
-  const kicker = statistical ? `${statisticalLabels[method.stat_category] || 'Statistical method'} · Analysis Card` : `${evaluationLabels[method.category]} · Evaluation Card`;
+  const kicker = statistical ? `Quantitative · ${statisticalLabels[method.stat_category] || 'Statistical method'}` : `${evaluationLabels[method.category]} · Evaluation method`;
   const body = statistical ? `
-    <section class="detail-block wide"><h3>Decision target</h3><p>${escapeHtml(method.claim)}</p></section>
-    <section class="detail-block"><h3>Purpose</h3><p>${escapeHtml(detail.purpose)}</p></section>
-    <section class="detail-block"><h3>Study design</h3><p>${escapeHtml(detail.group_count)} · ${escapeHtml(detail.sample_relationship)}</p></section>
+    <section class="detail-block"><h3>Analysis mode</h3><p>Quantitative</p></section>
+    <section class="detail-block"><h3>Method family</h3><p>${escapeHtml(statisticalLabels[method.stat_category])}</p></section>
+    <section class="detail-block wide"><h3>When to use</h3><p>${escapeHtml(method.suitable)}</p></section>
     <section class="detail-block"><h3>Outcome type</h3><p>${escapeHtml(detail.outcome_type)}</p></section>
-    <section class="detail-block"><h3>When to use it</h3><p>${escapeHtml(method.suitable)}</p></section>
+    <section class="detail-block"><h3>Groups / conditions</h3><p>${escapeHtml(detail.group_count)}</p></section>
+    <section class="detail-block"><h3>Sample relationship</h3><p>${escapeHtml(detail.sample_relationship)}</p></section>
+    <section class="detail-block"><h3>What it compares or estimates</h3><p>${escapeHtml(method.claim)}</p></section>
     <section class="detail-block wide"><h3>Key assumptions</h3><p>${escapeHtml(detail.assumptions)}</p></section>
-    <section class="detail-block wide"><h3>Hypotheses / estimand</h3><p>${escapeHtml(detail.hypotheses)}</p></section>
-    <section class="detail-block"><h3>What to report</h3><p>${escapeHtml(detail.reporting)}</p></section>
-    <section class="detail-block"><h3>How to interpret</h3><p>${escapeHtml(detail.interpretation)}</p></section>
-    <section class="detail-block warning"><h3>Common misuse</h3><p>${escapeHtml(method.misuse)}</p></section>
-    <section class="detail-block"><h3>Alternatives / complements</h3><p>${escapeHtml(method.alternative)}</p></section>
-    <section class="detail-block wide"><h3>Worked example</h3><p>${escapeHtml(detail.worked_example)}</p></section>` : `
-    <section class="detail-block wide"><h3>Research question / claim</h3><p>${escapeHtml(method.claim)}</p></section>
-    <section class="detail-block"><h3>When to use it</h3><p>${escapeHtml(method.suitable)}</p></section>
+    <section class="detail-block warning wide"><h3>Common misuse / limitations</h3><p>${escapeHtml(method.misuse)}</p></section>` : `
+    <section class="detail-block"><h3>Analysis mode</h3><p>${escapeHtml(method.analysis_modes.map(value => evaluationLabels[value] || value).join(', ') || evaluationLabels[method.category])}</p></section>
+    <section class="detail-block"><h3>Primary classification</h3><p>${escapeHtml(evaluationLabels[method.category])}</p></section>
+    <section class="detail-block wide"><h3>When to use</h3><p>${escapeHtml(method.suitable)}</p></section>
+    <section class="detail-block"><h3>Research stages</h3><p>${escapeHtml(method.stage.map(value => stageLabels[value] || value).join(', '))}</p></section>
+    <section class="detail-block"><h3>Evidence produced</h3><p>${escapeHtml(method.evidence.join(', '))}</p></section>
     <section class="detail-block"><h3>Study design</h3><p>${escapeHtml(method.design)}</p></section>
-    <section class="detail-block wide"><h3>Data & analysis</h3><p>${escapeHtml(method.analysis)}</p></section>
-    <section class="detail-block warning"><h3>Common misuse</h3><p>${escapeHtml(method.misuse)}</p></section>
-    <section class="detail-block"><h3>Alternatives / complements</h3><p>${escapeHtml(method.alternative)}</p></section>`;
+    <section class="detail-block"><h3>Typical data & analysis</h3><p>${escapeHtml(method.analysis)}</p></section>
+    <section class="detail-block warning wide"><h3>Common misuse / limitations</h3><p>${escapeHtml(method.misuse)}</p></section>`;
   const color = statistical ? '#4056a1' : method.category === 'quantitative' ? '#176b87' : method.category === 'qualitative' ? '#c84600' : '#7557a6';
   els.panel.style.setProperty('--cat', color);
-  els.panel.innerHTML = `<button class="icon-button close-detail">×</button><p class="detail-kicker">${escapeHtml(kicker)}</p><h2>${escapeHtml(method.name)}</h2><p class="detail-summary">${escapeHtml(method.summary)}</p><div class="detail-grid">${body}<section class="detail-block wide"><h3>Reference paper</h3><p>${linkify(method.reference_paper)}</p></section><section class="detail-block wide"><h3>Method source</h3><p>${linkify(method.method_source)}</p></section></div><div class="detail-actions"><button class="button favorite-detail">${favorites.has(method.id) ? '★ Favorited' : '☆ Favorite'}</button><button class="button share-card">Copy method link</button>${isAdmin ? '<button class="button edit-card">Edit</button><button class="button history-card">History</button><button class="button danger delete-card">Move to recycle bin</button>' : ''}</div>`;
+  els.panel.innerHTML = `<button class="icon-button close-detail">×</button><p class="detail-kicker">${escapeHtml(kicker)}</p><h2>${escapeHtml(method.name)}</h2><p class="detail-summary"><b>Key characteristics:</b> ${escapeHtml(method.summary)}</p><div class="detail-grid">${body}<section class="detail-block wide"><h3>Reference paper</h3><p>${linkify(method.reference_paper)}</p></section><section class="detail-block wide"><h3>Method source</h3><p>${linkify(method.method_source)}</p></section></div><div class="detail-actions"><button class="button favorite-detail">${favorites.has(method.id) ? '★ Favorited' : '☆ Favorite'}</button><button class="button share-card">Copy method link</button>${isAdmin ? '<button class="button edit-card">Edit</button><button class="button history-card">History</button><button class="button danger delete-card">Move to recycle bin</button>' : ''}</div>`;
   $('.close-detail', els.panel).onclick = closeDetail;
   $('.favorite-detail', els.panel).onclick = async () => { await toggleFavorite(method.id); openDetail(method.id); };
   $('.share-card', els.panel).onclick = () => navigator.clipboard.writeText(`${location.origin}${location.pathname}#card=${encodeURIComponent(method.id)}`).then(() => toast('Method link copied.'));
@@ -393,10 +415,13 @@ function openCardForm(method = null) {
   const type = method?.method_type || (activeModule === 'statistical' ? 'statistical' : 'evaluation');
   form.elements.editingId.value = method?.id || '';
   form.elements.methodType.value = type;
+  form.elements.preservedClaim.value = method?.claim || '';
+  form.elements.preservedAlternative.value = method?.alternative || '';
+  form.elements.preservedStatDetails.value = JSON.stringify(method?.stat_details || {});
   $('#cardFormTitle').textContent = method ? `Edit ${moduleName(type).toLowerCase()}` : `Add ${moduleName(type).toLowerCase()}`;
   updateFormType(type);
   if (method) {
-    for (const name of ['name', 'summary', 'claim', 'suitable', 'misuse', 'alternative']) form.elements[name].value = method[name] || '';
+    for (const name of ['name', 'summary', 'suitable', 'misuse']) form.elements[name].value = method[name] || '';
     form.elements.referencePaper.value = method.reference_paper || '';
     form.elements.methodSource.value = method.method_source || '';
     if (type === 'evaluation') {
@@ -407,15 +432,11 @@ function openCardForm(method = null) {
     } else {
       const detail = method.stat_details || {};
       form.elements.statCategory.value = method.stat_category || 'two-group';
-      form.elements.purpose.value = detail.purpose || '';
+      form.elements.statTarget.value = method.claim || '';
       form.elements.outcomeType.value = detail.outcome_type || '';
       form.elements.groupCount.value = detail.group_count || '';
       form.elements.sampleRelationship.value = detail.sample_relationship || '';
       form.elements.assumptions.value = detail.assumptions || '';
-      form.elements.hypotheses.value = detail.hypotheses || '';
-      form.elements.reporting.value = detail.reporting || '';
-      form.elements.interpretation.value = detail.interpretation || '';
-      form.elements.workedExample.value = detail.worked_example || '';
     }
   }
   $('#cardMessage').textContent = '';
@@ -425,14 +446,16 @@ function openCardForm(method = null) {
 function formRecord(form) {
   const data = new FormData(form);
   const type = String(data.get('methodType'));
+  const preservedClaim = String(data.get('preservedClaim') || '').trim();
+  const preservedAlternative = String(data.get('preservedAlternative') || '').trim();
   const base = {
     method_type: type,
     name: String(data.get('name')).trim(),
     summary: String(data.get('summary')).trim(),
-    claim: String(data.get('claim')).trim(),
+    claim: type === 'statistical' ? String(data.get('statTarget') || '').trim() : preservedClaim || String(data.get('suitable') || '').trim(),
     suitable: String(data.get('suitable')).trim(),
     misuse: String(data.get('misuse')).trim(),
-    alternative: String(data.get('alternative')).trim(),
+    alternative: preservedAlternative || 'Not specified.',
     reference_paper: String(data.get('referencePaper')).trim(),
     method_source: String(data.get('methodSource')).trim(),
     updated_at: new Date().toISOString(),
@@ -446,19 +469,20 @@ function formRecord(form) {
     if (!evidence.length) throw Error('Enter at least one evidence tag.');
     return { ...base, category, stat_category: null, analysis_modes: [...new Set([category, ...data.getAll('analysisModes')])], stage, evidence, design: String(data.get('design')).trim(), analysis: String(data.get('analysis')).trim(), stat_details: {} };
   }
-  const detailNames = ['purpose', 'outcomeType', 'groupCount', 'sampleRelationship', 'assumptions', 'hypotheses', 'reporting', 'interpretation', 'workedExample'];
+  const detailNames = ['statTarget', 'outcomeType', 'groupCount', 'sampleRelationship', 'assumptions'];
   if (detailNames.some(name => !String(data.get(name) || '').trim())) throw Error('Complete every statistical method field.');
+  let preservedDetails = {};
+  try { preservedDetails = JSON.parse(String(data.get('preservedStatDetails') || '{}')); } catch (_) { preservedDetails = {}; }
   return {
     ...base,
     category: 'mixed', stat_category: String(data.get('statCategory')), analysis_modes: [], stage: [],
     evidence: [String(data.get('outcomeType')), String(data.get('sampleRelationship')), String(data.get('groupCount'))],
     design: '', analysis: '',
     stat_details: {
-      purpose: String(data.get('purpose')).trim(), outcome_type: String(data.get('outcomeType')).trim(),
+      ...preservedDetails,
+      purpose: preservedDetails.purpose || String(data.get('statTarget')).trim(), outcome_type: String(data.get('outcomeType')).trim(),
       group_count: String(data.get('groupCount')).trim(), sample_relationship: String(data.get('sampleRelationship')).trim(),
-      assumptions: String(data.get('assumptions')).trim(), hypotheses: String(data.get('hypotheses')).trim(),
-      reporting: String(data.get('reporting')).trim(), interpretation: String(data.get('interpretation')).trim(),
-      worked_example: String(data.get('workedExample')).trim()
+      assumptions: String(data.get('assumptions')).trim()
     }
   };
 }
@@ -598,55 +622,12 @@ function setModuleForWizard(module) {
   els.guides.hidden = true;
 }
 
-function planData() {
-  const data = new FormData($('#planForm'));
-  return { name: String(data.get('researchName')).trim(), goal: String(data.get('researchGoal')).trim(), ids: data.getAll('planMethods') };
-}
-
-function renderPlan() {
-  const saved = JSON.parse(localStorage.getItem('researchStudyPlan') || '{}');
-  const ids = saved.ids?.length ? saved.ids : [...favorites];
-  $('#planForm').elements.researchName.value = saved.name || '';
-  $('#planForm').elements.researchGoal.value = saved.goal || '';
-  $('#planMethods').innerHTML = ['evaluation', 'statistical'].map(type => {
-    const list = moduleMethods(type);
-    return `<div class="plan-group"><h4>${type === 'evaluation' ? 'Evaluation methods' : 'Statistical methods'}</h4>${list.map(method => `<label><input type="checkbox" name="planMethods" value="${escapeHtml(method.id)}" ${ids.includes(method.id) ? 'checked' : ''}> ${escapeHtml(method.name)}</label>`).join('')}</div>`;
-  }).join('');
-  openModal('planModal');
-}
-
 function methodMarkdown(method) {
   if (method.method_type === 'statistical') {
     const detail = method.stat_details || {};
-    return `### ${method.name}\n\n- **Type:** Statistical method\n- **Purpose:** ${detail.purpose}\n- **Decision target:** ${method.claim}\n- **Outcome:** ${detail.outcome_type}\n- **Groups / conditions:** ${detail.group_count}\n- **Sample relationship:** ${detail.sample_relationship}\n- **Key assumptions:** ${detail.assumptions}\n- **What to report:** ${detail.reporting}\n- **Common misuse:** ${method.misuse}\n- **Reference:** ${method.reference_paper}`;
+    return `### ${method.name}\n\n- **Analysis mode:** Quantitative\n- **Method family:** ${statisticalLabels[method.stat_category]}\n- **Key characteristics:** ${method.summary}\n- **When to use:** ${method.suitable}\n- **What it compares or estimates:** ${method.claim}\n- **Outcome:** ${detail.outcome_type}\n- **Groups / conditions:** ${detail.group_count}\n- **Sample relationship:** ${detail.sample_relationship}\n- **Key assumptions:** ${detail.assumptions}\n- **Common misuse / limitations:** ${method.misuse}\n- **Reference:** ${method.reference_paper}\n- **Method source:** ${method.method_source}`;
   }
-  return `### ${method.name}\n\n- **Type:** Evaluation method\n- **Primary category:** ${evaluationLabels[method.category]}\n- **Best for:** ${method.claim}\n- **Study design:** ${method.design}\n- **Data & analysis:** ${method.analysis}\n- **Common misuse:** ${method.misuse}\n- **Reference:** ${method.reference_paper}`;
-}
-
-function planMarkdown(plan) {
-  const chosen = plan.ids.map(id => methods.find(method => method.id === id)).filter(Boolean);
-  return `# Study Plan: ${plan.name}\n\n## Research goal\n\n${plan.goal}\n\n## Selected methods\n\n${chosen.map(methodMarkdown).join('\n\n')}\n`;
-}
-
-async function planPdf(plan) {
-  const box = document.createElement('div');
-  box.style = 'position:fixed;left:-9999px;width:794px;padding:55px;background:white;color:#14202b;font:16px/1.6 Arial,"Microsoft YaHei",sans-serif;white-space:pre-wrap';
-  box.textContent = planMarkdown(plan);
-  document.body.append(box);
-  const canvas = await html2canvas(box, { scale: 1.5, backgroundColor: '#fff' });
-  box.remove();
-  const pdf = new jspdf.jsPDF('p', 'pt', 'a4');
-  const width = 555;
-  const imageHeight = canvas.height * width / canvas.width;
-  const pageHeight = 802;
-  const image = canvas.toDataURL('image/jpeg', 0.93);
-  let y = 0;
-  while (y < imageHeight) {
-    pdf.addImage(image, 'JPEG', 20, 20 - y, width, imageHeight);
-    y += pageHeight;
-    if (y < imageHeight) pdf.addPage();
-  }
-  pdf.save(`${slug(plan.name) || 'study-plan'}.pdf`);
+  return `### ${method.name}\n\n- **Analysis mode:** ${method.analysis_modes.map(value => evaluationLabels[value] || value).join(', ') || evaluationLabels[method.category]}\n- **Primary classification:** ${evaluationLabels[method.category]}\n- **Key characteristics:** ${method.summary}\n- **When to use:** ${method.suitable}\n- **Research stages:** ${method.stage.map(value => stageLabels[value] || value).join(', ')}\n- **Evidence produced:** ${method.evidence.join(', ')}\n- **Study design:** ${method.design}\n- **Typical data & analysis:** ${method.analysis}\n- **Common misuse / limitations:** ${method.misuse}\n- **Reference:** ${method.reference_paper}\n- **Method source:** ${method.method_source}`;
 }
 
 function libraryMarkdown() {
@@ -666,7 +647,7 @@ function libraryPdf() {
   pdf.setFontSize(9);
   list.forEach(method => {
     const family = method.method_type === 'statistical' ? statisticalLabels[method.stat_category] : evaluationLabels[method.category];
-    const lines = pdf.splitTextToSize(`${method.name} — ${family}\n${method.summary}\nDecision target: ${method.claim}\nReference: ${method.reference_paper}`, 180);
+    const lines = pdf.splitTextToSize(`${method.name} — ${family}\nKey characteristics: ${method.summary}\nWhen to use: ${method.suitable}\nReference: ${method.reference_paper}`, 180);
     if (y + lines.length * 4.5 > 282) { pdf.addPage(); y = 16; }
     pdf.setFont(undefined, 'bold');
     pdf.text(lines[0], 14, y);
@@ -678,14 +659,10 @@ function libraryPdf() {
 }
 
 async function loadAdmin() {
-  const [{ data: deleted }, { data: historyData }] = await Promise.all([
-    db.from('cards').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
-    db.from('card_versions').select('*').order('changed_at', { ascending: false }).limit(30)
-  ]);
+  const { data: deleted } = await db.from('cards').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false });
   $('#deletedCards').innerHTML = deleted?.length ? deleted.map(method => `<div class="admin-row"><span><b>${escapeHtml(method.name)}</b><small>Deleted ${new Date(method.deleted_at).toLocaleString()}</small></span><button class="button restore-deleted" data-id="${escapeHtml(method.id)}">Restore</button></div>`).join('') : '<p>No deleted methods.</p>';
-  $('#historyList').innerHTML = historyData?.length ? historyData.map(version => `<div class="admin-row" data-card-id="${escapeHtml(version.card_id)}"><span><b>${escapeHtml(version.snapshot?.name || version.card_id)}</b><small>${escapeHtml(version.action)} · ${escapeHtml(version.changed_by_email)} · ${new Date(version.changed_at).toLocaleString()}</small></span><button class="button restore-version" data-version="${version.id}">Restore this version</button></div>`).join('') : '<p>No changes recorded.</p>';
+  $('#systemChangelog').innerHTML = SYSTEM_CHANGELOG.map(release => `<article class="release-entry"><div class="release-heading"><span class="release-version">v${escapeHtml(release.version)}</span><span>${escapeHtml(release.date)}</span></div><h4>${escapeHtml(release.title)}</h4><ul>${release.changes.map(change => `<li>${escapeHtml(change)}</li>`).join('')}</ul></article>`).join('');
   $$('.restore-deleted').forEach(button => { button.onclick = () => restoreDeleted(button.dataset.id); });
-  $$('.restore-version').forEach(button => { button.onclick = () => restoreVersion(button.dataset.version); });
   openModal('adminModal');
 }
 
@@ -701,8 +678,12 @@ async function restoreDeleted(id) {
 
 async function openHistory(id) {
   closeDetail();
-  await loadAdmin();
-  $$('#historyList .admin-row').forEach(row => { row.hidden = row.dataset.cardId !== id; });
+  const method = methods.find(item => item.id === id);
+  const { data: historyData, error } = await db.from('card_versions').select('*').eq('card_id', id).order('changed_at', { ascending: false });
+  $('#cardHistoryTitle').textContent = `${method?.name || 'Method'} history`;
+  $('#cardHistoryList').innerHTML = error ? `<p>${escapeHtml(error.message)}</p>` : historyData?.length ? historyData.map(version => `<div class="admin-row"><span><b>${escapeHtml(version.action.replaceAll('_', ' '))}</b><small>${escapeHtml(version.changed_by_email || 'Unknown editor')} · ${new Date(version.changed_at).toLocaleString()}</small></span><button class="button restore-version" data-version="${version.id}">Restore this version</button></div>`).join('') : '<p>No changes recorded for this method.</p>';
+  $$('.restore-version', $('#cardHistoryList')).forEach(button => { button.onclick = () => restoreVersion(button.dataset.version); });
+  openModal('historyModal');
 }
 
 async function restoreVersion(versionId) {
@@ -716,7 +697,8 @@ async function restoreVersion(versionId) {
   const { error } = await db.from('cards').update(record).eq('id', version.card_id);
   if (error) return toast(error.message);
   await loadMethods();
-  await loadAdmin();
+  closeModal('historyModal');
+  await openHistory(version.card_id);
   toast('Historical version restored.');
 }
 
@@ -798,7 +780,6 @@ function bindEvents() {
   els.auth.onclick = () => session ? db.auth.signOut() : openModal('authModal');
   els.add.onclick = () => openCardForm();
   els.tools.onclick = loadAdmin;
-  $('#planButton').onclick = renderPlan;
   $('#wizardButton').onclick = () => openWizard();
   $('#compareButton').onclick = compareMethods;
   $('#clearCompareButton').onclick = () => { selected.clear(); els.tray.hidden = true; render(); };
@@ -819,13 +800,6 @@ function bindEvents() {
   $('#methodTypeSelect').onchange = event => updateFormType(event.target.value);
   $('#cardForm').onsubmit = saveCard;
   $('#wizardForm').onsubmit = runWizard;
-  $('#savePlanButton').onclick = event => {
-    event.preventDefault();
-    localStorage.setItem('researchStudyPlan', JSON.stringify(planData()));
-    $('#planMessage').textContent = 'Plan saved in this browser.';
-  };
-  $('#planMarkdownButton').onclick = () => { const plan = planData(); download(`${slug(plan.name)}.md`, planMarkdown(plan), 'text/markdown'); };
-  $('#planPdfButton').onclick = () => planPdf(planData());
   $('#exportLibraryButton').onclick = () => download(`${activeModule}-methods.md`, libraryMarkdown(), 'text/markdown');
   const pdfButton = document.createElement('button');
   pdfButton.className = 'side-link';
