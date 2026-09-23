@@ -1,74 +1,847 @@
-const SUPABASE_URL='https://mpduoubbicoxoulhkfen.supabase.co';
-const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wZHVvdWJiaWNveG91bGhrZmVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1NTUyMDMsImV4cCI6MjEwNTEzMTIwM30.M5o_lTEvSFXzv1y9s3hsAIOuVsjM76RuTPsvAbeKpXw';
-const ADMIN_EMAIL='cgao@stu.ecnu.edu.cn',db=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
-const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],h=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const labels={quantitative:'Quantitative',qualitative:'Qualitative',mixed:'Mixed methods'},stages={formative:'Formative',comparative:'Comparative',validation:'Validation',deployment:'Deployment'};
-let methods=[],session=null,isAdmin=false,favorites=new Set(),selected=new Set(),activeCategory='all',favoriteOnly=false,wizardScores=null,currentCard=null,currentPage=1;
-const PAGE_SIZE=6;
-const els={grid:$('#cardGrid'),count:$('#resultCount'),empty:$('#emptyState'),filters:$('#categoryFilters'),search:$('#searchInput'),stage:$('#stageFilter'),sync:$('#syncStatus'),auth:$('#authButton'),add:$('#addButton'),tools:$('#adminToolsButton'),detail:$('#detailModal'),panel:$('#detailPanel'),tray:$('#compareTray')};
-els.pagination=document.createElement('nav');els.pagination.id='pagination';els.pagination.className='pagination';els.pagination.setAttribute('aria-label','Card pages');els.empty.before(els.pagination);
-const fields=['id','category','analysis_modes','name','stage','evidence','summary','claim','suitable','design','analysis','misuse','alternative','reference_paper','method_source'];
-const openModal=id=>{$('#'+id).classList.add('open');document.body.style.overflow='hidden'},closeModal=m=>{(typeof m==='string'?$('#'+m):m).classList.remove('open');document.body.style.overflow=''};
-function toast(text){let n=document.createElement('div');n.className='toast';n.textContent=text;document.body.append(n);setTimeout(()=>n.remove(),2600)}
-function linkify(text){return h(text).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>')}
-function download(name,text,type='text/plain'){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-function slug(v){return v.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,54)||'evaluation-method'}
+const SUPABASE_URL = 'https://mpduoubbicoxoulhkfen.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wZHVvdWJiaWNveG91bGhrZmVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1NTUyMDMsImV4cCI6MjEwNTEzMTIwM30.M5o_lTEvSFXzv1y9s3hsAIOuVsjM76RuTPsvAbeKpXw';
+const ADMIN_EMAIL = 'cgao@stu.ecnu.edu.cn';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[char]));
+const evaluationLabels = { quantitative: 'Quantitative', qualitative: 'Qualitative', mixed: 'Mixed methods' };
+const statisticalLabels = { concept: 'Study design concept', 'two-group': 'Two-group comparison', 'multi-group': 'Multi-group comparison' };
+const stageLabels = { formative: 'Formative', comparative: 'Comparative', validation: 'Validation', deployment: 'Deployment' };
+const PAGE_SIZE = 6;
+const versionFields = [
+  'id', 'method_type', 'category', 'stat_category', 'analysis_modes', 'name', 'stage', 'evidence',
+  'summary', 'claim', 'suitable', 'design', 'analysis', 'misuse', 'alternative',
+  'reference_paper', 'method_source', 'stat_details'
+];
 
-async function initialize(){bind();const {data}=await db.auth.getSession();setSession(data.session);db.auth.onAuthStateChange((_e,s)=>setSession(s));await loadCards();openFromHash()}
-async function setSession(s){session=s;isAdmin=s?.user?.email?.toLowerCase()===ADMIN_EMAIL;els.auth.textContent=s?`Sign out · ${s.user.email.split('@')[0]}`:'Sign in';$$('.admin-only').forEach(x=>x.hidden=!isAdmin);await loadFavorites();if(methods.length)render()}
-async function loadCards(){els.sync.textContent='Syncing…';let {data,error}=await db.from('cards').select('*').is('deleted_at',null).order('name');if(error?.message?.includes('deleted_at'))({data,error}=await db.from('cards').select('*').order('name'));if(error){els.sync.textContent='Sync failed';els.empty.hidden=false;els.empty.innerHTML='<b>Cards could not be loaded.</b><br>'+h(error.message);return}methods=(data||[]).map(m=>({...m,analysis_modes:m.analysis_modes||[],stage:m.stage||[],evidence:m.evidence||[],reference_paper:m.reference_paper||'Reference will appear after the database upgrade.',method_source:m.method_source||'Method source will appear after the database upgrade.'}));els.sync.textContent='Cloud synced';buildFilters();render()}
-async function loadFavorites(){favorites.clear();if(session){const {data}=await db.from('favorites').select('card_id').eq('user_id',session.user.id);(data||[]).forEach(x=>favorites.add(x.card_id))}$('#favoriteCount').textContent=favorites.size}
-function buildFilters(){els.filters.innerHTML=['all','quantitative','qualitative','mixed'].map(k=>`<button class="filter-button ${activeCategory===k?'active':''}" data-cat="${k}"><i class="dot ${k==='all'?'':k}"></i><span>${k==='all'?'All methods':labels[k]}</span><span class="count">${k==='all'?methods.length:methods.filter(m=>m.category===k).length}</span></button>`).join('')}
-function filtered(){let q=els.search.value.trim().toLowerCase(),sv=els.stage.value,a=methods.filter(m=>(activeCategory==='all'||m.category===activeCategory)&&(sv==='all'||m.stage.includes(sv))&&(!favoriteOnly||favorites.has(m.id))&&(!q||[m.name,m.summary,m.claim,m.suitable,m.analysis,m.reference_paper,m.method_source,...m.evidence].join(' ').toLowerCase().includes(q)));if(wizardScores)a=a.filter(m=>wizardScores[m.id]>0).sort((x,y)=>wizardScores[y.id]-wizardScores[x.id]);return a}
-function render(){
- let list=filtered(),pageCount=Math.max(1,Math.ceil(list.length/PAGE_SIZE));
- currentPage=Math.min(Math.max(1,currentPage),pageCount);
- let visible=list.slice((currentPage-1)*PAGE_SIZE,currentPage*PAGE_SIZE);
- els.count.textContent=list.length;els.empty.hidden=!!list.length;
- els.grid.innerHTML=visible.map(m=>`<article class="method-card ${m.category}" data-id="${h(m.id)}" tabindex="0">${wizardScores?`<span class="recommend">${wizardScores[m.id]} match points</span>`:''}<div class="card-head"><h3>${h(m.name)}</h3></div><p class="summary">${h(m.summary)}</p><p class="mini">ANALYSIS MODES</p><div class="modes">${m.analysis_modes.map(x=>`<span class="mode ${x===m.category?'primary':''}">${x===m.category?'Primary · ':'Supports · '}${labels[x]}</span>`).join('')}</div><p class="mini">BEST FOR</p><p class="claim">${h(m.claim)}</p><div class="tags">${m.evidence.slice(0,3).map(x=>`<span class="tag">${h(x)}</span>`).join('')}</div><div class="card-actions"><label><input class="compare-check" type="checkbox" ${selected.has(m.id)?'checked':''}> Compare</label><button class="star ${favorites.has(m.id)?'active':''}" aria-label="Favorite">${favorites.has(m.id)?'★':'☆'}</button></div></article>`).join('');
- els.pagination.hidden=list.length<=PAGE_SIZE;
- els.pagination.innerHTML=list.length>PAGE_SIZE?`<button class="page-button" data-page="${currentPage-1}" ${currentPage===1?'disabled':''} aria-label="Previous page">‹ Prev</button>${Array.from({length:pageCount},(_,i)=>`<button class="page-button ${currentPage===i+1?'active':''}" data-page="${i+1}" aria-label="Page ${i+1}" ${currentPage===i+1?'aria-current="page"':''}>${i+1}</button>`).join('')}<span class="page-status">Page ${currentPage} of ${pageCount}</span><button class="page-button" data-page="${currentPage+1}" ${currentPage===pageCount?'disabled':''} aria-label="Next page">Next ›</button>`:'';
- els.grid.querySelectorAll('.method-card').forEach(card=>{card.onclick=e=>{if(e.target.closest('.compare-check')||e.target.closest('.star'))return;openDetail(card.dataset.id)};card.onkeydown=e=>{if(e.key==='Enter')openDetail(card.dataset.id)};card.querySelector('.compare-check').onchange=e=>toggleCompare(card.dataset.id,e.target.checked);card.querySelector('.star').onclick=()=>toggleFavorite(card.dataset.id)});$('#favoriteCount').textContent=favorites.size}
+let methods = [];
+let session = null;
+let isAdmin = false;
+let favorites = new Set();
+let selected = new Set();
+let activeModule = 'evaluation';
+let activeCategory = 'all';
+let favoriteOnly = false;
+let wizardScores = null;
+let currentPage = 1;
 
-async function toggleFavorite(id){if(!session){openModal('authModal');return}if(favorites.has(id)){await db.from('favorites').delete().eq('user_id',session.user.id).eq('card_id',id);favorites.delete(id)}else{const {error}=await db.from('favorites').insert({user_id:session.user.id,card_id:id});if(error)return toast(error.message);favorites.add(id)}render()}
-function toggleCompare(id,on){if(on&&selected.size>=3){toast('Select no more than 3 cards.');render();return}on?selected.add(id):selected.delete(id);$('#compareCount').textContent=selected.size;els.tray.hidden=selected.size<1;render()}
-function compare(){if(selected.size<2)return toast('Select 2–3 cards to compare.');let a=[...selected].map(id=>methods.find(m=>m.id===id)),rows=[['Primary category',m=>labels[m.category]],['Best for',m=>m.claim],['When to use',m=>m.suitable],['Study design',m=>m.design],['Data & analysis',m=>m.analysis],['Common misuse',m=>m.misuse],['Research stages',m=>m.stage.map(x=>stages[x]).join(', ')],['References',m=>m.reference_paper]];$('#compareContent').innerHTML=`<table class="compare-table"><thead><tr><th>Dimension</th>${a.map(m=>`<th>${h(m.name)}</th>`).join('')}</tr></thead><tbody>${rows.map(([n,f])=>`<tr><th>${n}</th>${a.map(m=>`<td>${h(f(m))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;openModal('compareModal')}
-function openDetail(id){let m=methods.find(x=>x.id===id);if(!m)return;currentCard=m;location.hash='card='+encodeURIComponent(id);els.panel.style.setProperty('--cat',m.category==='quantitative'?'#176b87':m.category==='qualitative'?'#c84600':'#7557a6');els.panel.innerHTML=`<button class="icon-button close-detail">×</button><p class="detail-kicker">Primary · ${labels[m.category]} · Evaluation Card</p><h2>${h(m.name)}</h2><div class="modes">${m.analysis_modes.map(x=>`<span class="mode ${x===m.category?'primary':''}">${labels[x]}</span>`).join('')}</div><div class="detail-grid"><section class="detail-block wide"><h3>Research question / claim</h3><p>${h(m.claim)}</p></section><section class="detail-block"><h3>When to use it</h3><p>${h(m.suitable)}</p></section><section class="detail-block"><h3>Study design</h3><p>${h(m.design)}</p></section><section class="detail-block wide"><h3>Data & analysis</h3><p>${h(m.analysis)}</p></section><section class="detail-block warning"><h3>Common misuse</h3><p>${h(m.misuse)}</p></section><section class="detail-block"><h3>Alternatives / complements</h3><p>${h(m.alternative)}</p></section><section class="detail-block wide"><h3>Reference paper</h3><p>${linkify(m.reference_paper)}</p></section><section class="detail-block wide"><h3>Method source</h3><p>${linkify(m.method_source)}</p></section></div><div class="detail-actions"><button class="button favorite-detail">${favorites.has(m.id)?'★ Favorited':'☆ Favorite'}</button><button class="button share-card">Copy card link</button>${isAdmin?'<button class="button edit-card">Edit</button><button class="button history-card">History</button><button class="button danger delete-card">Move to recycle bin</button>':''}</div>`;els.panel.querySelector('.close-detail').onclick=closeDetail;els.panel.querySelector('.favorite-detail').onclick=async()=>{await toggleFavorite(m.id);openDetail(m.id)};els.panel.querySelector('.share-card').onclick=()=>navigator.clipboard.writeText(`${location.origin}${location.pathname}#card=${encodeURIComponent(m.id)}`).then(()=>toast('Card link copied.'));if(isAdmin){els.panel.querySelector('.edit-card').onclick=()=>openCardForm(m);els.panel.querySelector('.history-card').onclick=()=>openHistory(m.id);els.panel.querySelector('.delete-card').onclick=()=>softDelete(m)}els.detail.classList.add('open');document.body.style.overflow='hidden'}
-function closeDetail(){els.detail.classList.remove('open');document.body.style.overflow='';history.replaceState(null,'',location.pathname+location.search)}function openFromHash(){let p=new URLSearchParams(location.hash.slice(1));if(p.get('card'))openDetail(p.get('card'))}
+const els = {
+  grid: $('#cardGrid'), guides: $('#guidesGrid'), count: $('#resultCount'), resultLabel: $('#resultLabel'),
+  empty: $('#emptyState'), filters: $('#categoryFilters'), search: $('#searchInput'), stage: $('#stageFilter'),
+  relationship: $('#relationshipFilter'), sync: $('#syncStatus'), auth: $('#authButton'), add: $('#addButton'),
+  tools: $('#adminToolsButton'), detail: $('#detailModal'), panel: $('#detailPanel'), tray: $('#compareTray'),
+  pagination: $('#pagination')
+};
 
-function openCardForm(m=null){const f=$('#cardForm');f.reset();$('#cardFormTitle').textContent=m?'Edit evaluation card':'Add evaluation card';f.elements.editingId.value=m?.id||'';if(m){for(const n of ['name','category','summary','claim','suitable','design','analysis','misuse','alternative'])f.elements[n].value=m[n];f.elements.evidence.value=m.evidence.join(', ');f.elements.referencePaper.value=m.reference_paper;f.elements.methodSource.value=m.method_source;$$('[name="analysisModes"]',f).forEach(x=>x.checked=m.analysis_modes.includes(x.value));$$('[name="stages"]',f).forEach(x=>x.checked=m.stage.includes(x.value))}$('#cardMessage').textContent='';openModal('cardModal')}
-function formRecord(f){let d=new FormData(f),category=d.get('category'),stage=d.getAll('stages'),evidence=String(d.get('evidence')).split(',').map(x=>x.trim()).filter(Boolean);if(!stage.length)throw Error('Select at least one research stage.');if(!evidence.length)throw Error('Enter at least one evidence tag.');return{category,name:String(d.get('name')).trim(),analysis_modes:[...new Set([category,...d.getAll('analysisModes')])],stage,evidence,summary:String(d.get('summary')).trim(),claim:String(d.get('claim')).trim(),suitable:String(d.get('suitable')).trim(),design:String(d.get('design')).trim(),analysis:String(d.get('analysis')).trim(),misuse:String(d.get('misuse')).trim(),alternative:String(d.get('alternative')).trim(),reference_paper:String(d.get('referencePaper')).trim(),method_source:String(d.get('methodSource')).trim(),updated_at:new Date().toISOString(),updated_by:session.user.id}}
-async function saveVersion(card,action){return db.from('card_versions').insert({card_id:card.id,snapshot:card,action,changed_by:session.user.id,changed_by_email:session.user.email})}
-async function saveCard(e){e.preventDefault();let f=e.currentTarget,msg=$('#cardMessage'),record;try{record=formRecord(f)}catch(err){msg.className='message error';msg.textContent=err.message;return}let id=f.elements.editingId.value,btn=$('#saveCardButton');btn.disabled=true;let error;if(id){let old=methods.find(x=>x.id===id);await saveVersion(old,'update');({error}=await db.from('cards').update(record).eq('id',id))}else{id=`${slug(record.name)}-${Date.now().toString(36)}`;record.id=id;({error}=await db.from('cards').insert(record));if(!error)await saveVersion(record,'create')}btn.disabled=false;if(error){msg.className='message error';msg.textContent=error.message;return}closeModal('cardModal');closeDetail();await loadCards();toast(id?'Card saved.':'Card added.')}
-async function softDelete(m){if(!confirm(`Move “${m.name}” to the recycle bin? It can be restored.`))return;await saveVersion(m,'delete');let {error}=await db.from('cards').update({deleted_at:new Date().toISOString(),deleted_by:session.user.id,updated_by:session.user.id}).eq('id',m.id);if(error)return toast(error.message);closeDetail();await loadCards();toast('Card moved to recycle bin.')}
+function openModal(id) {
+  $('#' + id).classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
 
-const wizardMap={
- 'controlled-experiment':{goal:['compare'],evidence:['performance','behavior'],setting:['lab'],resources:['medium','high']},'ab-test':{goal:['compare','validate'],evidence:['behavior'],setting:['remote','field'],resources:['high']},'eye-tracking':{goal:['compare','explain'],evidence:['behavior'],setting:['lab'],resources:['high']},survey:{goal:['explore','validate'],evidence:['experience'],setting:['remote','field'],resources:['low','medium']},'log-analysis':{goal:['explain','validate'],evidence:['behavior'],setting:['remote','field'],resources:['medium','high']},interview:{goal:['explore','explain'],evidence:['experience'],setting:['remote','field'],resources:['low','medium']},'think-aloud':{goal:['explore','explain'],evidence:['experience'],setting:['lab','remote'],resources:['low','medium']},'contextual-inquiry':{goal:['explore','explain'],evidence:['context'],setting:['field'],resources:['medium']},'heuristic-review':{goal:['explore'],evidence:['performance'],setting:['lab','remote'],resources:['low']},'usability-test':{goal:['explore','compare'],evidence:['performance','behavior','experience'],setting:['lab','remote'],resources:['medium']},'field-study':{goal:['explore','explain','validate'],evidence:['context','behavior','experience'],setting:['field'],resources:['high']},'diary-study':{goal:['explore','explain'],evidence:['context','experience'],setting:['field','remote'],resources:['medium']},'mixed-sequential':{goal:['explore','compare','explain','validate'],evidence:['performance','behavior','experience','context'],setting:['lab','remote','field'],resources:['high']}};
-function runWizard(e){e.preventDefault();let d=Object.fromEntries(new FormData(e.currentTarget));wizardScores={};methods.forEach(m=>{let x=wizardMap[m.id]||{goal:[],evidence:[],setting:[],resources:[]},s=0;if(x.goal.includes(d.goal))s+=4;if(x.evidence.includes(d.evidence))s+=4;if(x.setting.includes(d.setting))s+=2;if(x.resources.includes(d.resources))s+=1;wizardScores[m.id]=s});favoriteOnly=false;activeCategory='all';els.stage.value='all';els.search.value='';$('#clearWizardButton').hidden=false;closeModal('wizardModal');buildFilters();render();toast('Recommendations ranked by fit.')}
+function closeModal(target) {
+  (typeof target === 'string' ? $('#' + target) : target).classList.remove('open');
+  document.body.style.overflow = '';
+}
 
-function planData(){let d=new FormData($('#planForm'));return{name:String(d.get('researchName')).trim(),goal:String(d.get('researchGoal')).trim(),ids:d.getAll('planMethods')}}
-function renderPlan(){let saved=JSON.parse(localStorage.getItem('evaluationPlan')||'{}'),ids=saved.ids?.length?saved.ids:[...favorites];$('#planForm').elements.researchName.value=saved.name||'';$('#planForm').elements.researchGoal.value=saved.goal||'';$('#planMethods').innerHTML=methods.map(m=>`<label><input type="checkbox" name="planMethods" value="${h(m.id)}" ${ids.includes(m.id)?'checked':''}> ${h(m.name)}</label>`).join('');openModal('planModal')}
-function planMarkdown(p){let chosen=p.ids.map(id=>methods.find(m=>m.id===id)).filter(Boolean);return`# Evaluation Plan: ${p.name}\n\n## Research goal\n\n${p.goal}\n\n## Selected methods\n\n${chosen.map(m=>`### ${m.name}\n\n- **Primary category:** ${labels[m.category]}\n- **Best for:** ${m.claim}\n- **Study design:** ${m.design}\n- **Data & analysis:** ${m.analysis}\n- **Reference:** ${m.reference_paper}`).join('\n\n')}\n`}
-async function planPdf(p){let md=planMarkdown(p),box=document.createElement('div');box.style='position:fixed;left:-9999px;width:794px;padding:55px;background:white;color:#14202b;font:16px/1.6 Arial,"Microsoft YaHei",sans-serif;white-space:pre-wrap';box.textContent=md;document.body.append(box);let canvas=await html2canvas(box,{scale:1.5,backgroundColor:'#fff'});box.remove();let pdf=new jspdf.jsPDF('p','pt','a4'),w=555,hgt=canvas.height*w/canvas.width,page=802,y=0,img=canvas.toDataURL('image/jpeg',.93);while(y<hgt){pdf.addImage(img,'JPEG',20,20-y,w,hgt);y+=page;if(y<hgt)pdf.addPage()}pdf.save(`${slug(p.name)||'evaluation-plan'}.pdf`)}
+function toast(text) {
+  const node = document.createElement('div');
+  node.className = 'toast';
+  node.textContent = text;
+  document.body.append(node);
+  setTimeout(() => node.remove(), 2600);
+}
 
-function libraryMarkdown(){return`# Evaluation Card Library\n\n${methods.map(m=>`## ${m.name}\n\n- **Primary category:** ${labels[m.category]}\n- **Research stages:** ${m.stage.map(x=>stages[x]).join(', ')}\n- **Summary:** ${m.summary}\n- **Best for:** ${m.claim}\n- **Study design:** ${m.design}\n- **Data & analysis:** ${m.analysis}\n- **Common misuse:** ${m.misuse}\n- **Reference:** ${m.reference_paper}\n- **Method source:** ${m.method_source}`).join('\n\n')}\n`}
-function libraryPdf(){let pdf=new jspdf.jsPDF(),y=16;pdf.setFontSize(16);pdf.text('Evaluation Card Library',14,y);y+=10;pdf.setFontSize(9);methods.forEach(m=>{let lines=pdf.splitTextToSize(`${m.name} — ${labels[m.category]}\n${m.summary}\nBest for: ${m.claim}\nReference: ${m.reference_paper}`,180);if(y+lines.length*4.5>282){pdf.addPage();y=16}pdf.setFont(undefined,'bold');pdf.text(lines[0],14,y);pdf.setFont(undefined,'normal');pdf.text(lines.slice(1),14,y+5);y+=lines.length*4.5+8});pdf.save('evaluation-card-library.pdf')}
+function linkify(text) {
+  return escapeHtml(text).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+}
 
-async function loadAdmin(){let [{data:deleted},{data:history}]=await Promise.all([db.from('cards').select('*').not('deleted_at','is',null).order('deleted_at',{ascending:false}),db.from('card_versions').select('*').order('changed_at',{ascending:false}).limit(30)]);$('#deletedCards').innerHTML=deleted?.length?deleted.map(m=>`<div class="admin-row"><span><b>${h(m.name)}</b><small>Deleted ${new Date(m.deleted_at).toLocaleString()}</small></span><button class="button restore-deleted" data-id="${h(m.id)}">Restore</button></div>`).join(''):'<p>No deleted cards.</p>';$('#historyList').innerHTML=history?.length?history.map(v=>`<div class="admin-row"><span><b>${h(v.snapshot?.name||v.card_id)}</b><small>${h(v.action)} · ${h(v.changed_by_email)} · ${new Date(v.changed_at).toLocaleString()}</small></span><button class="button restore-version" data-v="${v.id}">Restore this version</button></div>`).join(''):'<p>No changes recorded.</p>';$$('.restore-deleted').forEach(b=>b.onclick=()=>restoreDeleted(b.dataset.id));$$('.restore-version').forEach(b=>b.onclick=()=>restoreVersion(b.dataset.v));openModal('adminModal')}
-async function restoreDeleted(id){let {data:card}=await db.from('cards').select('*').eq('id',id).single();await saveVersion(card,'restore_deleted');let {error}=await db.from('cards').update({deleted_at:null,deleted_by:null,updated_at:new Date().toISOString(),updated_by:session.user.id}).eq('id',id);if(error)return toast(error.message);await loadCards();await loadAdmin();toast('Card restored.')}
-async function openHistory(id){closeDetail();await loadAdmin();$$('#historyList .admin-row').forEach(r=>r.hidden=!r.textContent.includes(methods.find(m=>m.id===id)?.name))}
-async function restoreVersion(versionId){if(!confirm('Restore this historical version? The current version will also be preserved.'))return;let {data:v}=await db.from('card_versions').select('*').eq('id',versionId).single(),{data:current}=await db.from('cards').select('*').eq('id',v.card_id).single();await saveVersion(current,'before_restore');let record={};fields.filter(x=>x!=='id').forEach(k=>{if(k in v.snapshot)record[k]=v.snapshot[k]});record.deleted_at=null;record.deleted_by=null;record.updated_at=new Date().toISOString();record.updated_by=session.user.id;let {error}=await db.from('cards').update(record).eq('id',v.card_id);if(error)return toast(error.message);await loadCards();await loadAdmin();toast('Historical version restored.')}
+function download(name, text, type = 'text/plain') {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([text], { type }));
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
 
-const csvColumns=['name','category','analysis_modes','stage','evidence','summary','claim','suitable','design','analysis','misuse','alternative','reference_paper','method_source'];
-function csvTemplate(){return Papa.unparse([Object.fromEntries(csvColumns.map(c=>[c,c==='analysis_modes'?'quantitative|mixed':c==='stage'?'formative|validation':c==='evidence'?'Performance|Behavior':'']))])}
-async function importCsv(file){let msg=$('#importMessage');Papa.parse(file,{header:true,skipEmptyLines:true,complete:async r=>{let bad=r.data.find((x,i)=>csvColumns.some(c=>!String(x[c]||'').trim())&&(x._row=i+2));if(bad){msg.className='message error';msg.textContent=`Row ${bad._row} has a missing required value.`;return}let records=r.data.map(x=>({id:`${slug(x.name)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,5)}`,name:x.name.trim(),category:x.category.trim(),analysis_modes:x.analysis_modes.split('|').map(v=>v.trim()),stage:x.stage.split('|').map(v=>v.trim()),evidence:x.evidence.split('|').map(v=>v.trim()),summary:x.summary.trim(),claim:x.claim.trim(),suitable:x.suitable.trim(),design:x.design.trim(),analysis:x.analysis.trim(),misuse:x.misuse.trim(),alternative:x.alternative.trim(),reference_paper:x.reference_paper.trim(),method_source:x.method_source.trim(),updated_by:session.user.id}));let {error}=await db.from('cards').insert(records);if(error){msg.className='message error';msg.textContent=error.message;return}for(const x of records)await saveVersion(x,'import');msg.className='message success';msg.textContent=`Imported ${records.length} cards.`;await loadCards();await loadAdmin()}})}
+function slug(value) {
+  return value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 54) || 'research-method';
+}
 
-function bind(){els.search.oninput=()=>{wizardScores=null;$('#clearWizardButton').hidden=true;render()};els.stage.onchange=render;els.filters.onclick=e=>{let b=e.target.closest('[data-cat]');if(!b)return;activeCategory=b.dataset.cat;favoriteOnly=false;buildFilters();render()};$('#favoritesFilter').onclick=()=>{if(!session){openModal('authModal');return}favoriteOnly=!favoriteOnly;$('#favoritesFilter').classList.toggle('active',favoriteOnly);render()};els.auth.onclick=()=>session?db.auth.signOut():openModal('authModal');els.add.onclick=()=>openCardForm();els.tools.onclick=loadAdmin;$('#planButton').onclick=renderPlan;$('#wizardButton').onclick=()=>openModal('wizardModal');$('#compareButton').onclick=compare;$('#clearCompareButton').onclick=()=>{selected.clear();els.tray.hidden=true;render()};$('#clearWizardButton').onclick=()=>{wizardScores=null;$('#clearWizardButton').hidden=true;render()};els.detail.onclick=e=>{if(e.target===els.detail)closeDetail()};$$('.modal .close,.modal .cancel').forEach(b=>b.onclick=()=>closeModal(b.closest('.modal')));$$('.modal').forEach(m=>m.onclick=e=>{if(e.target===m)closeModal(m)});$('#authForm').onsubmit=async e=>{e.preventDefault();let email=$('#loginEmail').value.trim(),btn=$('#sendLinkButton');btn.disabled=true;let {error}=await db.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin+location.pathname}});btn.disabled=false;$('#authMessage').className='message '+(error?'error':'success');$('#authMessage').textContent=error?error.message:'Sign-in link sent. Check your inbox.'};$('#cardForm').onsubmit=saveCard;$('#wizardForm').onsubmit=runWizard;$('#savePlanButton').onclick=e=>{e.preventDefault();let p=planData();localStorage.setItem('evaluationPlan',JSON.stringify(p));$('#planMessage').textContent='Plan saved in this browser.'};$('#planMarkdownButton').onclick=()=>{let p=planData();download(`${slug(p.name)}.md`,planMarkdown(p),'text/markdown')};$('#planPdfButton').onclick=()=>planPdf(planData());$('#exportLibraryButton').onclick=()=>download('evaluation-card-library.md',libraryMarkdown(),'text/markdown');let pdf=document.createElement('button');pdf.className='side-link';pdf.textContent='↓ Export library PDF';pdf.onclick=libraryPdf;$('#exportLibraryButton').after(pdf);$('#templateButton').onclick=()=>download('evaluation-card-template.csv','\ufeff'+csvTemplate(),'text/csv');$('#csvInput').onchange=e=>e.target.files[0]&&importCsv(e.target.files[0]);window.onhashchange=openFromHash}
-els.pagination.onclick=e=>{let b=e.target.closest('[data-page]');if(!b||b.disabled)return;currentPage=Number(b.dataset.page);render();document.querySelector('.catalog-head').scrollIntoView({behavior:'smooth',block:'start'})};
-els.search.addEventListener('input',()=>currentPage=1);
-els.stage.addEventListener('change',()=>currentPage=1);
-els.filters.addEventListener('click',()=>currentPage=1);
-$('#favoritesFilter').addEventListener('click',()=>currentPage=1);
-$('#wizardForm').addEventListener('submit',()=>currentPage=1);
-$('#clearWizardButton').addEventListener('click',()=>currentPage=1);
+function normalizeMethod(method) {
+  const type = method.method_type || 'evaluation';
+  return {
+    ...method,
+    method_type: type,
+    category: method.category || (type === 'statistical' ? 'statistical' : 'mixed'),
+    stat_category: method.stat_category || null,
+    analysis_modes: method.analysis_modes || [],
+    stage: method.stage || [],
+    evidence: method.evidence || [],
+    stat_details: method.stat_details || {},
+    reference_paper: method.reference_paper || 'Reference will appear after the database upgrade.',
+    method_source: method.method_source || 'Method source will appear after the database upgrade.'
+  };
+}
+
+function moduleMethods(module = activeModule) {
+  if (module === 'guides') return [];
+  return methods.filter(method => method.method_type === module);
+}
+
+function moduleName(type) {
+  return type === 'statistical' ? 'Statistical Method' : 'Evaluation Method';
+}
+
+async function initialize() {
+  bindEvents();
+  const { data } = await db.auth.getSession();
+  await setSession(data.session);
+  db.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+  await loadMethods();
+  openFromHash();
+}
+
+async function setSession(nextSession) {
+  session = nextSession;
+  isAdmin = session?.user?.email?.toLowerCase() === ADMIN_EMAIL;
+  els.auth.textContent = session ? `Sign out · ${session.user.email.split('@')[0]}` : 'Sign in';
+  $$('.admin-only').forEach(node => { node.hidden = !isAdmin; });
+  await loadFavorites();
+  if (methods.length) render();
+}
+
+async function loadMethods() {
+  els.sync.textContent = 'Syncing…';
+  let { data, error } = await db.from('cards').select('*').is('deleted_at', null).order('name');
+  if (error?.message?.includes('deleted_at')) ({ data, error } = await db.from('cards').select('*').order('name'));
+  const cloudMethods = (data || []).map(normalizeMethod);
+  const fallbackStatistical = (window.STATISTICAL_METHODS || []).map(normalizeMethod);
+  const cloudIds = new Set(cloudMethods.map(method => method.id));
+  methods = [...cloudMethods, ...fallbackStatistical.filter(method => !cloudIds.has(method.id))];
+  if (error && !cloudMethods.length) {
+    els.sync.textContent = 'Using built-in methods';
+    methods = fallbackStatistical;
+  } else {
+    els.sync.textContent = error ? 'Partially synced' : 'Cloud synced';
+  }
+  buildFilters();
+  render();
+}
+
+async function loadFavorites() {
+  favorites.clear();
+  if (session) {
+    const { data } = await db.from('favorites').select('card_id').eq('user_id', session.user.id);
+    (data || []).forEach(row => favorites.add(row.card_id));
+  }
+  $('#favoriteCount').textContent = favorites.size;
+}
+
+function setModule(module) {
+  activeModule = module;
+  activeCategory = 'all';
+  favoriteOnly = false;
+  wizardScores = null;
+  selected.clear();
+  currentPage = 1;
+  els.search.value = '';
+  els.stage.value = 'all';
+  els.relationship.value = 'all';
+  $('#clearWizardButton').hidden = true;
+  $('#favoritesFilter').classList.remove('active');
+  $$('.module-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.module === module));
+  $('#sidebar').hidden = module === 'guides';
+  $('#discoveryBar').hidden = module === 'guides';
+  els.grid.hidden = module === 'guides';
+  els.guides.hidden = module !== 'guides';
+  els.tray.hidden = true;
+  buildFilters();
+  render();
+}
+
+function buildFilters() {
+  if (activeModule === 'guides') return;
+  const source = moduleMethods();
+  const definitions = activeModule === 'evaluation'
+    ? [['all', 'All evaluation methods'], ['quantitative', 'Quantitative'], ['qualitative', 'Qualitative'], ['mixed', 'Mixed methods']]
+    : [['all', 'All statistical methods'], ['concept', 'Study design concepts'], ['two-group', 'Two-group comparisons'], ['multi-group', 'Multi-group comparisons']];
+  $('#categoryTitle').textContent = activeModule === 'evaluation' ? 'Primary category' : 'Method family';
+  $('#evaluationFilters').hidden = activeModule !== 'evaluation';
+  $('#statisticalFilters').hidden = activeModule !== 'statistical';
+  els.filters.innerHTML = definitions.map(([key, label]) => {
+    const count = key === 'all' ? source.length : source.filter(method => (activeModule === 'evaluation' ? method.category : method.stat_category) === key).length;
+    return `<button class="filter-button ${activeCategory === key ? 'active' : ''}" data-cat="${key}"><i class="dot ${key === 'all' ? '' : key}"></i><span>${label}</span><span class="count">${count}</span></button>`;
+  }).join('');
+}
+
+function filteredMethods() {
+  const query = els.search.value.trim().toLowerCase();
+  const stage = els.stage.value;
+  const relationship = els.relationship.value;
+  let list = moduleMethods().filter(method => {
+    const category = activeModule === 'evaluation' ? method.category : method.stat_category;
+    const detail = method.stat_details || {};
+    const categoryMatch = activeCategory === 'all' || category === activeCategory;
+    const stageMatch = activeModule !== 'evaluation' || stage === 'all' || method.stage.includes(stage);
+    const relationshipMatch = activeModule !== 'statistical' || relationship === 'all' || String(detail.sample_relationship || '').toLowerCase().includes(relationship);
+    const favoriteMatch = !favoriteOnly || favorites.has(method.id);
+    const haystack = [method.name, method.summary, method.claim, method.suitable, method.analysis, method.misuse,
+      method.reference_paper, method.method_source, ...method.evidence, ...Object.values(detail)].join(' ').toLowerCase();
+    return categoryMatch && stageMatch && relationshipMatch && favoriteMatch && (!query || haystack.includes(query));
+  });
+  if (wizardScores) {
+    list = list.filter(method => wizardScores[method.id] > 0).sort((a, b) => wizardScores[b.id] - wizardScores[a.id]);
+  }
+  return list;
+}
+
+function render() {
+  if (activeModule === 'guides') {
+    renderGuides();
+    return;
+  }
+  const list = filteredMethods();
+  const pageCount = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  currentPage = Math.min(Math.max(1, currentPage), pageCount);
+  const visible = list.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  els.count.textContent = list.length;
+  els.resultLabel.innerHTML = `<strong id="resultCount">${list.length}</strong> ${activeModule === 'evaluation' ? 'evaluation' : 'statistical'} methods`;
+  els.empty.hidden = Boolean(list.length);
+  els.grid.innerHTML = visible.map(renderCard).join('');
+  renderPagination(list.length, pageCount);
+  bindCardEvents();
+  $('#favoriteCount').textContent = favorites.size;
+}
+
+function renderCard(method) {
+  const isStatistical = method.method_type === 'statistical';
+  const family = isStatistical ? statisticalLabels[method.stat_category] : evaluationLabels[method.category];
+  const details = method.stat_details || {};
+  const chips = isStatistical
+    ? [details.sample_relationship, details.outcome_type, details.group_count].filter(Boolean)
+    : method.evidence.slice(0, 3);
+  const metaTitle = isStatistical ? 'DECISION TARGET' : 'BEST FOR';
+  return `<article class="method-card ${isStatistical ? `statistical ${method.stat_category}` : method.category}" data-id="${escapeHtml(method.id)}" tabindex="0">
+    ${wizardScores ? `<span class="recommend">${wizardScores[method.id]} match points</span>` : ''}
+    <p class="card-family">${escapeHtml(family || moduleName(method.method_type))}</p>
+    <div class="card-head"><h3>${escapeHtml(method.name)}</h3></div>
+    <p class="summary">${escapeHtml(method.summary)}</p>
+    <p class="mini">${metaTitle}</p><p class="claim">${escapeHtml(method.claim)}</p>
+    <div class="tags">${chips.slice(0, 3).map(value => `<span class="tag">${escapeHtml(value)}</span>`).join('')}</div>
+    <div class="card-actions"><label><input class="compare-check" type="checkbox" ${selected.has(method.id) ? 'checked' : ''}> Compare</label><button class="star ${favorites.has(method.id) ? 'active' : ''}" aria-label="Favorite">${favorites.has(method.id) ? '★' : '☆'}</button></div>
+  </article>`;
+}
+
+function renderPagination(total, pageCount) {
+  els.pagination.hidden = total <= PAGE_SIZE;
+  els.pagination.innerHTML = total > PAGE_SIZE ? `
+    <button class="page-button" data-page="${currentPage - 1}" ${currentPage === 1 ? 'disabled' : ''}>‹ Prev</button>
+    ${Array.from({ length: pageCount }, (_, index) => `<button class="page-button ${currentPage === index + 1 ? 'active' : ''}" data-page="${index + 1}" ${currentPage === index + 1 ? 'aria-current="page"' : ''}>${index + 1}</button>`).join('')}
+    <span class="page-status">Page ${currentPage} of ${pageCount}</span>
+    <button class="page-button" data-page="${currentPage + 1}" ${currentPage === pageCount ? 'disabled' : ''}>Next ›</button>` : '';
+}
+
+function bindCardEvents() {
+  $$('.method-card', els.grid).forEach(card => {
+    card.onclick = event => {
+      if (!event.target.closest('.compare-check') && !event.target.closest('.star')) openDetail(card.dataset.id);
+    };
+    card.onkeydown = event => { if (event.key === 'Enter') openDetail(card.dataset.id); };
+    $('.compare-check', card).onchange = event => toggleCompare(card.dataset.id, event.target.checked);
+    $('.star', card).onclick = () => toggleFavorite(card.dataset.id);
+  });
+}
+
+function renderGuides() {
+  els.resultLabel.innerHTML = '<strong>3</strong> decision guides';
+  els.empty.hidden = true;
+  els.pagination.hidden = true;
+  els.guides.innerHTML = `
+    <article class="guide-card"><span>01 · EVALUATION DESIGN</span><h3>Evaluation Method Wizard</h3><p>Start from your research goal, evidence, setting, and resources.</p><button class="button guide-launch" data-guide="evaluation">Start evaluation guide →</button></article>
+    <article class="guide-card"><span>02 · STATISTICAL ANALYSIS</span><h3>Statistical Test Selector</h3><p>Match sample relationship, number of conditions, outcome type, and estimand.</p><button class="button guide-launch" data-guide="statistical">Select a statistical method →</button></article>
+    <article class="guide-card featured"><span>03 · FOUNDATIONAL CONCEPT</span><h3>Independent or Paired?</h3><p>Resolve the design decision that determines the correct family of tests.</p><button class="button guide-detail" data-id="independent-vs-paired-samples">Open guide →</button></article>`;
+  $$('.guide-launch', els.guides).forEach(button => { button.onclick = () => openWizard(button.dataset.guide); });
+  $$('.guide-detail', els.guides).forEach(button => { button.onclick = () => openDetail(button.dataset.id); });
+}
+
+async function toggleFavorite(id) {
+  if (!session) {
+    openModal('authModal');
+    return;
+  }
+  if (favorites.has(id)) {
+    await db.from('favorites').delete().eq('user_id', session.user.id).eq('card_id', id);
+    favorites.delete(id);
+  } else {
+    const { error } = await db.from('favorites').insert({ user_id: session.user.id, card_id: id });
+    if (error) return toast(error.message);
+    favorites.add(id);
+  }
+  render();
+}
+
+function toggleCompare(id, checked) {
+  const method = methods.find(item => item.id === id);
+  const selectedMethods = [...selected].map(value => methods.find(item => item.id === value)).filter(Boolean);
+  if (checked && selectedMethods.some(item => item.method_type !== method.method_type)) {
+    toast('Compare methods from the same library section.');
+    render();
+    return;
+  }
+  if (checked && selected.size >= 3) {
+    toast('Select no more than 3 methods.');
+    render();
+    return;
+  }
+  checked ? selected.add(id) : selected.delete(id);
+  $('#compareCount').textContent = selected.size;
+  els.tray.hidden = selected.size < 1;
+  render();
+}
+
+function compareMethods() {
+  if (selected.size < 2) return toast('Select 2–3 methods to compare.');
+  const chosen = [...selected].map(id => methods.find(method => method.id === id)).filter(Boolean);
+  const statistical = chosen[0].method_type === 'statistical';
+  const rows = statistical ? [
+    ['Method family', method => statisticalLabels[method.stat_category]],
+    ['Decision target', method => method.claim],
+    ['Outcome type', method => method.stat_details?.outcome_type],
+    ['Groups / conditions', method => method.stat_details?.group_count],
+    ['Sample relationship', method => method.stat_details?.sample_relationship],
+    ['Key assumptions', method => method.stat_details?.assumptions],
+    ['What to report', method => method.stat_details?.reporting],
+    ['Common misuse', method => method.misuse],
+    ['Reference', method => method.reference_paper]
+  ] : [
+    ['Primary category', method => evaluationLabels[method.category]],
+    ['Best for', method => method.claim],
+    ['When to use', method => method.suitable],
+    ['Study design', method => method.design],
+    ['Data & analysis', method => method.analysis],
+    ['Common misuse', method => method.misuse],
+    ['Research stages', method => method.stage.map(value => stageLabels[value]).join(', ')],
+    ['Reference', method => method.reference_paper]
+  ];
+  $('#compareContent').innerHTML = `<table class="compare-table"><thead><tr><th>Dimension</th>${chosen.map(method => `<th>${escapeHtml(method.name)}</th>`).join('')}</tr></thead><tbody>${rows.map(([label, value]) => `<tr><th>${label}</th>${chosen.map(method => `<td>${escapeHtml(value(method) || '—')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  openModal('compareModal');
+}
+
+function openDetail(id) {
+  const method = methods.find(item => item.id === id);
+  if (!method) return;
+  const statistical = method.method_type === 'statistical';
+  const detail = method.stat_details || {};
+  const kicker = statistical ? `${statisticalLabels[method.stat_category] || 'Statistical method'} · Analysis Card` : `${evaluationLabels[method.category]} · Evaluation Card`;
+  const body = statistical ? `
+    <section class="detail-block wide"><h3>Decision target</h3><p>${escapeHtml(method.claim)}</p></section>
+    <section class="detail-block"><h3>Purpose</h3><p>${escapeHtml(detail.purpose)}</p></section>
+    <section class="detail-block"><h3>Study design</h3><p>${escapeHtml(detail.group_count)} · ${escapeHtml(detail.sample_relationship)}</p></section>
+    <section class="detail-block"><h3>Outcome type</h3><p>${escapeHtml(detail.outcome_type)}</p></section>
+    <section class="detail-block"><h3>When to use it</h3><p>${escapeHtml(method.suitable)}</p></section>
+    <section class="detail-block wide"><h3>Key assumptions</h3><p>${escapeHtml(detail.assumptions)}</p></section>
+    <section class="detail-block wide"><h3>Hypotheses / estimand</h3><p>${escapeHtml(detail.hypotheses)}</p></section>
+    <section class="detail-block"><h3>What to report</h3><p>${escapeHtml(detail.reporting)}</p></section>
+    <section class="detail-block"><h3>How to interpret</h3><p>${escapeHtml(detail.interpretation)}</p></section>
+    <section class="detail-block warning"><h3>Common misuse</h3><p>${escapeHtml(method.misuse)}</p></section>
+    <section class="detail-block"><h3>Alternatives / complements</h3><p>${escapeHtml(method.alternative)}</p></section>
+    <section class="detail-block wide"><h3>Worked example</h3><p>${escapeHtml(detail.worked_example)}</p></section>` : `
+    <section class="detail-block wide"><h3>Research question / claim</h3><p>${escapeHtml(method.claim)}</p></section>
+    <section class="detail-block"><h3>When to use it</h3><p>${escapeHtml(method.suitable)}</p></section>
+    <section class="detail-block"><h3>Study design</h3><p>${escapeHtml(method.design)}</p></section>
+    <section class="detail-block wide"><h3>Data & analysis</h3><p>${escapeHtml(method.analysis)}</p></section>
+    <section class="detail-block warning"><h3>Common misuse</h3><p>${escapeHtml(method.misuse)}</p></section>
+    <section class="detail-block"><h3>Alternatives / complements</h3><p>${escapeHtml(method.alternative)}</p></section>`;
+  const color = statistical ? '#4056a1' : method.category === 'quantitative' ? '#176b87' : method.category === 'qualitative' ? '#c84600' : '#7557a6';
+  els.panel.style.setProperty('--cat', color);
+  els.panel.innerHTML = `<button class="icon-button close-detail">×</button><p class="detail-kicker">${escapeHtml(kicker)}</p><h2>${escapeHtml(method.name)}</h2><p class="detail-summary">${escapeHtml(method.summary)}</p><div class="detail-grid">${body}<section class="detail-block wide"><h3>Reference paper</h3><p>${linkify(method.reference_paper)}</p></section><section class="detail-block wide"><h3>Method source</h3><p>${linkify(method.method_source)}</p></section></div><div class="detail-actions"><button class="button favorite-detail">${favorites.has(method.id) ? '★ Favorited' : '☆ Favorite'}</button><button class="button share-card">Copy method link</button>${isAdmin ? '<button class="button edit-card">Edit</button><button class="button history-card">History</button><button class="button danger delete-card">Move to recycle bin</button>' : ''}</div>`;
+  $('.close-detail', els.panel).onclick = closeDetail;
+  $('.favorite-detail', els.panel).onclick = async () => { await toggleFavorite(method.id); openDetail(method.id); };
+  $('.share-card', els.panel).onclick = () => navigator.clipboard.writeText(`${location.origin}${location.pathname}#card=${encodeURIComponent(method.id)}`).then(() => toast('Method link copied.'));
+  if (isAdmin) {
+    $('.edit-card', els.panel).onclick = () => openCardForm(method);
+    $('.history-card', els.panel).onclick = () => openHistory(method.id);
+    $('.delete-card', els.panel).onclick = () => softDelete(method);
+  }
+  location.hash = 'card=' + encodeURIComponent(id);
+  els.detail.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeDetail() {
+  els.detail.classList.remove('open');
+  document.body.style.overflow = '';
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+function openFromHash() {
+  const id = new URLSearchParams(location.hash.slice(1)).get('card');
+  if (id) openDetail(id);
+}
+
+function updateFormType(type) {
+  $('#evaluationFormFields').hidden = type !== 'evaluation';
+  $('#statisticalFormFields').hidden = type !== 'statistical';
+}
+
+function openCardForm(method = null) {
+  const form = $('#cardForm');
+  form.reset();
+  const type = method?.method_type || (activeModule === 'statistical' ? 'statistical' : 'evaluation');
+  form.elements.editingId.value = method?.id || '';
+  form.elements.methodType.value = type;
+  $('#cardFormTitle').textContent = method ? `Edit ${moduleName(type).toLowerCase()}` : `Add ${moduleName(type).toLowerCase()}`;
+  updateFormType(type);
+  if (method) {
+    for (const name of ['name', 'summary', 'claim', 'suitable', 'misuse', 'alternative']) form.elements[name].value = method[name] || '';
+    form.elements.referencePaper.value = method.reference_paper || '';
+    form.elements.methodSource.value = method.method_source || '';
+    if (type === 'evaluation') {
+      for (const name of ['category', 'design', 'analysis']) form.elements[name].value = method[name] || '';
+      form.elements.evidence.value = method.evidence.join(', ');
+      $$('[name="analysisModes"]', form).forEach(input => { input.checked = method.analysis_modes.includes(input.value); });
+      $$('[name="stages"]', form).forEach(input => { input.checked = method.stage.includes(input.value); });
+    } else {
+      const detail = method.stat_details || {};
+      form.elements.statCategory.value = method.stat_category || 'two-group';
+      form.elements.purpose.value = detail.purpose || '';
+      form.elements.outcomeType.value = detail.outcome_type || '';
+      form.elements.groupCount.value = detail.group_count || '';
+      form.elements.sampleRelationship.value = detail.sample_relationship || '';
+      form.elements.assumptions.value = detail.assumptions || '';
+      form.elements.hypotheses.value = detail.hypotheses || '';
+      form.elements.reporting.value = detail.reporting || '';
+      form.elements.interpretation.value = detail.interpretation || '';
+      form.elements.workedExample.value = detail.worked_example || '';
+    }
+  }
+  $('#cardMessage').textContent = '';
+  openModal('cardModal');
+}
+
+function formRecord(form) {
+  const data = new FormData(form);
+  const type = String(data.get('methodType'));
+  const base = {
+    method_type: type,
+    name: String(data.get('name')).trim(),
+    summary: String(data.get('summary')).trim(),
+    claim: String(data.get('claim')).trim(),
+    suitable: String(data.get('suitable')).trim(),
+    misuse: String(data.get('misuse')).trim(),
+    alternative: String(data.get('alternative')).trim(),
+    reference_paper: String(data.get('referencePaper')).trim(),
+    method_source: String(data.get('methodSource')).trim(),
+    updated_at: new Date().toISOString(),
+    updated_by: session.user.id
+  };
+  if (type === 'evaluation') {
+    const category = String(data.get('category'));
+    const stage = data.getAll('stages');
+    const evidence = String(data.get('evidence')).split(',').map(value => value.trim()).filter(Boolean);
+    if (!stage.length) throw Error('Select at least one research stage.');
+    if (!evidence.length) throw Error('Enter at least one evidence tag.');
+    return { ...base, category, stat_category: null, analysis_modes: [...new Set([category, ...data.getAll('analysisModes')])], stage, evidence, design: String(data.get('design')).trim(), analysis: String(data.get('analysis')).trim(), stat_details: {} };
+  }
+  const detailNames = ['purpose', 'outcomeType', 'groupCount', 'sampleRelationship', 'assumptions', 'hypotheses', 'reporting', 'interpretation', 'workedExample'];
+  if (detailNames.some(name => !String(data.get(name) || '').trim())) throw Error('Complete every statistical method field.');
+  return {
+    ...base,
+    category: 'mixed', stat_category: String(data.get('statCategory')), analysis_modes: [], stage: [],
+    evidence: [String(data.get('outcomeType')), String(data.get('sampleRelationship')), String(data.get('groupCount'))],
+    design: '', analysis: '',
+    stat_details: {
+      purpose: String(data.get('purpose')).trim(), outcome_type: String(data.get('outcomeType')).trim(),
+      group_count: String(data.get('groupCount')).trim(), sample_relationship: String(data.get('sampleRelationship')).trim(),
+      assumptions: String(data.get('assumptions')).trim(), hypotheses: String(data.get('hypotheses')).trim(),
+      reporting: String(data.get('reporting')).trim(), interpretation: String(data.get('interpretation')).trim(),
+      worked_example: String(data.get('workedExample')).trim()
+    }
+  };
+}
+
+async function saveVersion(card, action) {
+  return db.from('card_versions').insert({ card_id: card.id, snapshot: card, action, changed_by: session.user.id, changed_by_email: session.user.email });
+}
+
+async function saveCard(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = $('#cardMessage');
+  let record;
+  try { record = formRecord(form); } catch (error) {
+    message.className = 'message error';
+    message.textContent = error.message;
+    return;
+  }
+  let id = form.elements.editingId.value;
+  const button = $('#saveCardButton');
+  button.disabled = true;
+  let error;
+  if (id) {
+    const old = methods.find(method => method.id === id);
+    if (old) await saveVersion(old, 'update');
+    ({ error } = await db.from('cards').update(record).eq('id', id));
+  } else {
+    id = `${slug(record.name)}-${Date.now().toString(36)}`;
+    record.id = id;
+    ({ error } = await db.from('cards').insert(record));
+    if (!error) await saveVersion(record, 'create');
+  }
+  button.disabled = false;
+  if (error) {
+    message.className = 'message error';
+    message.textContent = error.message;
+    return;
+  }
+  closeModal('cardModal');
+  closeDetail();
+  await loadMethods();
+  toast('Method saved.');
+}
+
+async function softDelete(method) {
+  if (!confirm(`Move “${method.name}” to the recycle bin? It can be restored.`)) return;
+  await saveVersion(method, 'delete');
+  const { error } = await db.from('cards').update({ deleted_at: new Date().toISOString(), deleted_by: session.user.id, updated_by: session.user.id }).eq('id', method.id);
+  if (error) return toast(error.message);
+  closeDetail();
+  await loadMethods();
+  toast('Method moved to the recycle bin.');
+}
+
+const evaluationWizardMap = {
+  'controlled-experiment': { goal: ['compare'], evidence: ['performance', 'behavior'], setting: ['lab'], resources: ['medium', 'high'] },
+  'ab-test': { goal: ['compare', 'validate'], evidence: ['behavior'], setting: ['remote', 'field'], resources: ['high'] },
+  'eye-tracking': { goal: ['compare', 'explain'], evidence: ['behavior'], setting: ['lab'], resources: ['high'] },
+  survey: { goal: ['explore', 'validate'], evidence: ['experience'], setting: ['remote', 'field'], resources: ['low', 'medium'] },
+  'log-analysis': { goal: ['explain', 'validate'], evidence: ['behavior'], setting: ['remote', 'field'], resources: ['medium', 'high'] },
+  interview: { goal: ['explore', 'explain'], evidence: ['experience'], setting: ['remote', 'field'], resources: ['low', 'medium'] },
+  'think-aloud': { goal: ['explore', 'explain'], evidence: ['experience'], setting: ['lab', 'remote'], resources: ['low', 'medium'] },
+  'contextual-inquiry': { goal: ['explore', 'explain'], evidence: ['context'], setting: ['field'], resources: ['medium'] },
+  'heuristic-review': { goal: ['explore'], evidence: ['performance'], setting: ['lab', 'remote'], resources: ['low'] },
+  'usability-test': { goal: ['explore', 'compare'], evidence: ['performance', 'behavior', 'experience'], setting: ['lab', 'remote'], resources: ['medium'] },
+  'field-study': { goal: ['explore', 'explain', 'validate'], evidence: ['context', 'behavior', 'experience'], setting: ['field'], resources: ['high'] },
+  'diary-study': { goal: ['explore', 'explain'], evidence: ['context', 'experience'], setting: ['field', 'remote'], resources: ['medium'] },
+  'mixed-sequential': { goal: ['explore', 'compare', 'explain', 'validate'], evidence: ['performance', 'behavior', 'experience', 'context'], setting: ['lab', 'remote', 'field'], resources: ['high'] }
+};
+
+function openWizard(type = activeModule === 'statistical' ? 'statistical' : 'evaluation') {
+  $('#wizardTitle').textContent = type === 'statistical' ? 'Statistical Test Selector' : 'Evaluation Method Wizard';
+  $('#wizardIntro').textContent = type === 'statistical'
+    ? 'Answer four questions. The result is a starting point—not a substitute for checking assumptions and your estimand.'
+    : 'Answer four questions to rank evaluation methods by fit.';
+  const form = $('#wizardForm');
+  form.dataset.type = type;
+  form.innerHTML = type === 'statistical' ? `
+    <label class="field"><span>1. What is your immediate decision?</span><select name="goal"><option value="design">Determine independent vs. paired samples</option><option value="two">Compare two groups or conditions</option><option value="multi">Compare three or more groups or conditions</option></select></label>
+    <label class="field"><span>2. How are observations related?</span><select name="relationship"><option value="independent">Different, independent units</option><option value="paired">Same or explicitly matched units</option><option value="repeated">Repeated measures across 3+ conditions</option></select></label>
+    <label class="field"><span>3. What is the outcome?</span><select name="outcome"><option value="continuous">Continuous; a mean is meaningful</option><option value="ordinal">Ordinal or rank-based</option></select></label>
+    <label class="field"><span>4. Which estimand is defensible?</span><select name="approach"><option value="parametric">Mean difference under model assumptions</option><option value="rank">Distributional / rank-based comparison</option></select></label>
+    <footer><button class="button cancel" type="button">Cancel</button><button class="button primary">Show recommendation</button></footer>` : `
+    <label class="field"><span>1. Main research goal</span><select name="goal"><option value="explore">Explore needs or problems</option><option value="compare">Compare alternatives</option><option value="explain">Explain behavior or experience</option><option value="validate">Validate in use</option></select></label>
+    <label class="field"><span>2. Evidence you need</span><select name="evidence"><option value="performance">Performance</option><option value="behavior">Behavior</option><option value="experience">Experience or perception</option><option value="context">Context and practice</option></select></label>
+    <label class="field"><span>3. Study setting</span><select name="setting"><option value="lab">Controlled lab</option><option value="remote">Remote</option><option value="field">Real-world field</option></select></label>
+    <label class="field"><span>4. Available resources</span><select name="resources"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+    <footer><button class="button cancel" type="button">Cancel</button><button class="button primary">Rank methods</button></footer>`;
+  $('.cancel', form).onclick = () => closeModal('wizardModal');
+  openModal('wizardModal');
+}
+
+function runWizard(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form));
+  wizardScores = {};
+  if (form.dataset.type === 'statistical') {
+    let recommendation;
+    if (data.goal === 'design') recommendation = 'independent-vs-paired-samples';
+    else if (data.goal === 'two' && data.relationship === 'independent' && data.approach === 'parametric') recommendation = 'independent-samples-t-test';
+    else if (data.goal === 'two' && data.relationship !== 'independent' && data.approach === 'parametric') recommendation = 'paired-samples-t-test';
+    else if (data.goal === 'two' && data.relationship === 'independent') recommendation = 'mann-whitney-u-test';
+    else if (data.goal === 'two') recommendation = 'wilcoxon-signed-rank-test';
+    else if (data.goal === 'multi' && data.relationship === 'independent' && data.approach === 'parametric') recommendation = 'one-way-anova';
+    else if (data.goal === 'multi' && data.relationship !== 'independent' && data.approach === 'parametric') recommendation = 'repeated-measures-anova';
+    else if (data.goal === 'multi' && data.relationship === 'independent') recommendation = 'kruskal-wallis-test';
+    else recommendation = 'friedman-test';
+    moduleMethods('statistical').forEach(method => { wizardScores[method.id] = method.id === recommendation ? 10 : 0; });
+    setModuleForWizard('statistical');
+  } else {
+    moduleMethods('evaluation').forEach(method => {
+      const map = evaluationWizardMap[method.id] || { goal: [], evidence: [], setting: [], resources: [] };
+      wizardScores[method.id] = (map.goal.includes(data.goal) ? 4 : 0) + (map.evidence.includes(data.evidence) ? 4 : 0) + (map.setting.includes(data.setting) ? 2 : 0) + (map.resources.includes(data.resources) ? 1 : 0);
+    });
+    setModuleForWizard('evaluation');
+  }
+  favoriteOnly = false;
+  activeCategory = 'all';
+  currentPage = 1;
+  els.search.value = '';
+  els.stage.value = 'all';
+  els.relationship.value = 'all';
+  $('#clearWizardButton').hidden = false;
+  closeModal('wizardModal');
+  buildFilters();
+  render();
+  toast('Recommendation ready. Review assumptions before deciding.');
+}
+
+function setModuleForWizard(module) {
+  activeModule = module;
+  $$('.module-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.module === module));
+  $('#sidebar').hidden = false;
+  $('#discoveryBar').hidden = false;
+  els.grid.hidden = false;
+  els.guides.hidden = true;
+}
+
+function planData() {
+  const data = new FormData($('#planForm'));
+  return { name: String(data.get('researchName')).trim(), goal: String(data.get('researchGoal')).trim(), ids: data.getAll('planMethods') };
+}
+
+function renderPlan() {
+  const saved = JSON.parse(localStorage.getItem('researchStudyPlan') || '{}');
+  const ids = saved.ids?.length ? saved.ids : [...favorites];
+  $('#planForm').elements.researchName.value = saved.name || '';
+  $('#planForm').elements.researchGoal.value = saved.goal || '';
+  $('#planMethods').innerHTML = ['evaluation', 'statistical'].map(type => {
+    const list = moduleMethods(type);
+    return `<div class="plan-group"><h4>${type === 'evaluation' ? 'Evaluation methods' : 'Statistical methods'}</h4>${list.map(method => `<label><input type="checkbox" name="planMethods" value="${escapeHtml(method.id)}" ${ids.includes(method.id) ? 'checked' : ''}> ${escapeHtml(method.name)}</label>`).join('')}</div>`;
+  }).join('');
+  openModal('planModal');
+}
+
+function methodMarkdown(method) {
+  if (method.method_type === 'statistical') {
+    const detail = method.stat_details || {};
+    return `### ${method.name}\n\n- **Type:** Statistical method\n- **Purpose:** ${detail.purpose}\n- **Decision target:** ${method.claim}\n- **Outcome:** ${detail.outcome_type}\n- **Groups / conditions:** ${detail.group_count}\n- **Sample relationship:** ${detail.sample_relationship}\n- **Key assumptions:** ${detail.assumptions}\n- **What to report:** ${detail.reporting}\n- **Common misuse:** ${method.misuse}\n- **Reference:** ${method.reference_paper}`;
+  }
+  return `### ${method.name}\n\n- **Type:** Evaluation method\n- **Primary category:** ${evaluationLabels[method.category]}\n- **Best for:** ${method.claim}\n- **Study design:** ${method.design}\n- **Data & analysis:** ${method.analysis}\n- **Common misuse:** ${method.misuse}\n- **Reference:** ${method.reference_paper}`;
+}
+
+function planMarkdown(plan) {
+  const chosen = plan.ids.map(id => methods.find(method => method.id === id)).filter(Boolean);
+  return `# Study Plan: ${plan.name}\n\n## Research goal\n\n${plan.goal}\n\n## Selected methods\n\n${chosen.map(methodMarkdown).join('\n\n')}\n`;
+}
+
+async function planPdf(plan) {
+  const box = document.createElement('div');
+  box.style = 'position:fixed;left:-9999px;width:794px;padding:55px;background:white;color:#14202b;font:16px/1.6 Arial,"Microsoft YaHei",sans-serif;white-space:pre-wrap';
+  box.textContent = planMarkdown(plan);
+  document.body.append(box);
+  const canvas = await html2canvas(box, { scale: 1.5, backgroundColor: '#fff' });
+  box.remove();
+  const pdf = new jspdf.jsPDF('p', 'pt', 'a4');
+  const width = 555;
+  const imageHeight = canvas.height * width / canvas.width;
+  const pageHeight = 802;
+  const image = canvas.toDataURL('image/jpeg', 0.93);
+  let y = 0;
+  while (y < imageHeight) {
+    pdf.addImage(image, 'JPEG', 20, 20 - y, width, imageHeight);
+    y += pageHeight;
+    if (y < imageHeight) pdf.addPage();
+  }
+  pdf.save(`${slug(plan.name) || 'study-plan'}.pdf`);
+}
+
+function libraryMarkdown() {
+  const list = moduleMethods();
+  const title = activeModule === 'statistical' ? 'Statistical Methods' : 'Evaluation Methods';
+  return `# Evaluation & Analysis Method Library: ${title}\n\n${list.map(methodMarkdown).join('\n\n')}\n`;
+}
+
+function libraryPdf() {
+  const list = moduleMethods();
+  const title = activeModule === 'statistical' ? 'Statistical Methods' : 'Evaluation Methods';
+  const pdf = new jspdf.jsPDF();
+  let y = 16;
+  pdf.setFontSize(16);
+  pdf.text(`Evaluation & Analysis Method Library — ${title}`, 14, y);
+  y += 10;
+  pdf.setFontSize(9);
+  list.forEach(method => {
+    const family = method.method_type === 'statistical' ? statisticalLabels[method.stat_category] : evaluationLabels[method.category];
+    const lines = pdf.splitTextToSize(`${method.name} — ${family}\n${method.summary}\nDecision target: ${method.claim}\nReference: ${method.reference_paper}`, 180);
+    if (y + lines.length * 4.5 > 282) { pdf.addPage(); y = 16; }
+    pdf.setFont(undefined, 'bold');
+    pdf.text(lines[0], 14, y);
+    pdf.setFont(undefined, 'normal');
+    pdf.text(lines.slice(1), 14, y + 5);
+    y += lines.length * 4.5 + 8;
+  });
+  pdf.save(`${activeModule}-methods.pdf`);
+}
+
+async function loadAdmin() {
+  const [{ data: deleted }, { data: historyData }] = await Promise.all([
+    db.from('cards').select('*').not('deleted_at', 'is', null).order('deleted_at', { ascending: false }),
+    db.from('card_versions').select('*').order('changed_at', { ascending: false }).limit(30)
+  ]);
+  $('#deletedCards').innerHTML = deleted?.length ? deleted.map(method => `<div class="admin-row"><span><b>${escapeHtml(method.name)}</b><small>Deleted ${new Date(method.deleted_at).toLocaleString()}</small></span><button class="button restore-deleted" data-id="${escapeHtml(method.id)}">Restore</button></div>`).join('') : '<p>No deleted methods.</p>';
+  $('#historyList').innerHTML = historyData?.length ? historyData.map(version => `<div class="admin-row" data-card-id="${escapeHtml(version.card_id)}"><span><b>${escapeHtml(version.snapshot?.name || version.card_id)}</b><small>${escapeHtml(version.action)} · ${escapeHtml(version.changed_by_email)} · ${new Date(version.changed_at).toLocaleString()}</small></span><button class="button restore-version" data-version="${version.id}">Restore this version</button></div>`).join('') : '<p>No changes recorded.</p>';
+  $$('.restore-deleted').forEach(button => { button.onclick = () => restoreDeleted(button.dataset.id); });
+  $$('.restore-version').forEach(button => { button.onclick = () => restoreVersion(button.dataset.version); });
+  openModal('adminModal');
+}
+
+async function restoreDeleted(id) {
+  const { data: card } = await db.from('cards').select('*').eq('id', id).single();
+  await saveVersion(card, 'restore_deleted');
+  const { error } = await db.from('cards').update({ deleted_at: null, deleted_by: null, updated_at: new Date().toISOString(), updated_by: session.user.id }).eq('id', id);
+  if (error) return toast(error.message);
+  await loadMethods();
+  await loadAdmin();
+  toast('Method restored.');
+}
+
+async function openHistory(id) {
+  closeDetail();
+  await loadAdmin();
+  $$('#historyList .admin-row').forEach(row => { row.hidden = row.dataset.cardId !== id; });
+}
+
+async function restoreVersion(versionId) {
+  if (!confirm('Restore this historical version? The current version will also be preserved.')) return;
+  const { data: version } = await db.from('card_versions').select('*').eq('id', versionId).single();
+  const { data: current } = await db.from('cards').select('*').eq('id', version.card_id).single();
+  await saveVersion(current, 'before_restore');
+  const record = {};
+  versionFields.filter(field => field !== 'id').forEach(field => { if (field in version.snapshot) record[field] = version.snapshot[field]; });
+  Object.assign(record, { deleted_at: null, deleted_by: null, updated_at: new Date().toISOString(), updated_by: session.user.id });
+  const { error } = await db.from('cards').update(record).eq('id', version.card_id);
+  if (error) return toast(error.message);
+  await loadMethods();
+  await loadAdmin();
+  toast('Historical version restored.');
+}
+
+const csvColumns = ['method_type', 'name', 'category', 'stat_category', 'analysis_modes', 'stage', 'evidence', 'summary', 'claim', 'suitable', 'design', 'analysis', 'misuse', 'alternative', 'reference_paper', 'method_source', 'stat_details_json'];
+
+function csvTemplate() {
+  const example = Object.fromEntries(csvColumns.map(column => [column, '']));
+  Object.assign(example, {
+    method_type: 'evaluation', name: 'Example method', category: 'mixed', analysis_modes: 'quantitative|qualitative|mixed',
+    stage: 'formative|validation', evidence: 'Behavior|Experience', summary: 'Short summary', claim: 'Research question supported',
+    suitable: 'When this method fits', design: 'Study design', analysis: 'Data and analysis', misuse: 'Common misuse',
+    alternative: 'Alternative method', reference_paper: 'Citation and URL', method_source: 'Authoritative source and URL', stat_details_json: '{}'
+  });
+  return Papa.unparse([example]);
+}
+
+async function importCsv(file) {
+  const message = $('#importMessage');
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: async result => {
+      try {
+        const records = result.data.map((row, index) => {
+          const type = (row.method_type || 'evaluation').trim();
+          const required = ['name', 'summary', 'claim', 'suitable', 'misuse', 'alternative', 'reference_paper', 'method_source'];
+          if (required.some(column => !String(row[column] || '').trim())) throw Error(`Row ${index + 2} has a missing required value.`);
+          let statDetails = {};
+          if (type === 'statistical') statDetails = JSON.parse(row.stat_details_json || '{}');
+          return {
+            id: `${slug(row.name)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+            method_type: type, name: row.name.trim(), category: (row.category || (type === 'statistical' ? 'statistical' : 'mixed')).trim(),
+            stat_category: (row.stat_category || '').trim() || null,
+            analysis_modes: String(row.analysis_modes || '').split('|').map(value => value.trim()).filter(Boolean),
+            stage: String(row.stage || '').split('|').map(value => value.trim()).filter(Boolean),
+            evidence: String(row.evidence || '').split('|').map(value => value.trim()).filter(Boolean),
+            summary: row.summary.trim(), claim: row.claim.trim(), suitable: row.suitable.trim(), design: String(row.design || '').trim(),
+            analysis: String(row.analysis || '').trim(), misuse: row.misuse.trim(), alternative: row.alternative.trim(),
+            reference_paper: row.reference_paper.trim(), method_source: row.method_source.trim(), stat_details: statDetails,
+            updated_by: session.user.id
+          };
+        });
+        const { error } = await db.from('cards').insert(records);
+        if (error) throw error;
+        for (const record of records) await saveVersion(record, 'import');
+        message.className = 'message success';
+        message.textContent = `Imported ${records.length} methods.`;
+        await loadMethods();
+        await loadAdmin();
+      } catch (error) {
+        message.className = 'message error';
+        message.textContent = error.message;
+      }
+    }
+  });
+}
+
+function bindEvents() {
+  $$('.module-tab').forEach(tab => { tab.onclick = () => setModule(tab.dataset.module); });
+  els.search.oninput = () => { wizardScores = null; currentPage = 1; $('#clearWizardButton').hidden = true; render(); };
+  els.stage.onchange = () => { currentPage = 1; render(); };
+  els.relationship.onchange = () => { currentPage = 1; render(); };
+  els.filters.onclick = event => {
+    const button = event.target.closest('[data-cat]');
+    if (!button) return;
+    activeCategory = button.dataset.cat;
+    favoriteOnly = false;
+    currentPage = 1;
+    buildFilters();
+    render();
+  };
+  $('#favoritesFilter').onclick = () => {
+    if (!session) return openModal('authModal');
+    favoriteOnly = !favoriteOnly;
+    currentPage = 1;
+    $('#favoritesFilter').classList.toggle('active', favoriteOnly);
+    render();
+  };
+  els.auth.onclick = () => session ? db.auth.signOut() : openModal('authModal');
+  els.add.onclick = () => openCardForm();
+  els.tools.onclick = loadAdmin;
+  $('#planButton').onclick = renderPlan;
+  $('#wizardButton').onclick = () => openWizard();
+  $('#compareButton').onclick = compareMethods;
+  $('#clearCompareButton').onclick = () => { selected.clear(); els.tray.hidden = true; render(); };
+  $('#clearWizardButton').onclick = () => { wizardScores = null; currentPage = 1; $('#clearWizardButton').hidden = true; render(); };
+  els.detail.onclick = event => { if (event.target === els.detail) closeDetail(); };
+  $$('.modal .close,.modal .cancel').forEach(button => { button.onclick = () => closeModal(button.closest('.modal')); });
+  $$('.modal').forEach(modal => { modal.onclick = event => { if (event.target === modal) closeModal(modal); }; });
+  $('#authForm').onsubmit = async event => {
+    event.preventDefault();
+    const email = $('#loginEmail').value.trim();
+    const button = $('#sendLinkButton');
+    button.disabled = true;
+    const { error } = await db.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+    button.disabled = false;
+    $('#authMessage').className = 'message ' + (error ? 'error' : 'success');
+    $('#authMessage').textContent = error ? error.message : 'Sign-in link sent. Check your inbox.';
+  };
+  $('#methodTypeSelect').onchange = event => updateFormType(event.target.value);
+  $('#cardForm').onsubmit = saveCard;
+  $('#wizardForm').onsubmit = runWizard;
+  $('#savePlanButton').onclick = event => {
+    event.preventDefault();
+    localStorage.setItem('researchStudyPlan', JSON.stringify(planData()));
+    $('#planMessage').textContent = 'Plan saved in this browser.';
+  };
+  $('#planMarkdownButton').onclick = () => { const plan = planData(); download(`${slug(plan.name)}.md`, planMarkdown(plan), 'text/markdown'); };
+  $('#planPdfButton').onclick = () => planPdf(planData());
+  $('#exportLibraryButton').onclick = () => download(`${activeModule}-methods.md`, libraryMarkdown(), 'text/markdown');
+  const pdfButton = document.createElement('button');
+  pdfButton.className = 'side-link';
+  pdfButton.textContent = '↓ Export current library PDF';
+  pdfButton.onclick = libraryPdf;
+  $('#exportLibraryButton').after(pdfButton);
+  $('#templateButton').onclick = () => download('method-library-template.csv', '\ufeff' + csvTemplate(), 'text/csv');
+  $('#csvInput').onchange = event => event.target.files[0] && importCsv(event.target.files[0]);
+  els.pagination.onclick = event => {
+    const button = event.target.closest('[data-page]');
+    if (!button || button.disabled) return;
+    currentPage = Number(button.dataset.page);
+    render();
+    $('.catalog-head').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  window.onhashchange = openFromHash;
+}
+
 initialize();
